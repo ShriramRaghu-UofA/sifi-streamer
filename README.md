@@ -1,5 +1,7 @@
 # sifi-streamer
 
+[![CI](https://github.com/BLINCdev/sifi-streamer/actions/workflows/main.yml/badge.svg)](https://github.com/BLINCdev/sifi-streamer/actions/workflows/main.yml)
+
 Private Python 3.14+ package for SiFi acquisition, shared-memory live signals,
 and append-only capture logs. The `sifi_streamer` namespace is preserved so
 existing consumers can replace their copied package with a dependency.
