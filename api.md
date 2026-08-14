@@ -112,14 +112,26 @@ segments.
 
 `create_sifi_capture(capture_file, capture_id, attributes=None, *,
 bridge_executable=..., host="127.0.0.1", port=5000, transport="tcp",
-emg_sample_rate=1600, synthetic=False, config=None)` returns an unstarted generic
+sensor_profile=None, synthetic=False, config=None)` returns an unstarted generic
 controller composed with `SiFiCaptureBackend`. No process, device, or file is
 created until `start()`.
 
-Hardware capture requires a preinstalled bridge. `emg_sample_rate` must be one
-of `EMG_SAMPLE_RATES`: 500, 1000, 1600, or 2000 Hz. `BridgeTransport` provides
-`TCP`, `UDP`, and `STDOUT`. With `synthetic=True`, the same background,
-shared-memory, and recording path runs without the bridge.
+Hardware capture requires a preinstalled bridge. `sensor_profile` accepts a
+complete immutable `SiFiSensorProfile`; omission selects `ALL_SENSORS_PROFILE`.
+`EMG_ONLY_PROFILE` and `EMG_IMU_PROFILE` provide reduced enabled sets. Every
+sensor option is concrete and is sent on every connection, including settings
+for disabled sensors. The final sensor-state command is followed by `info`
+validation before acquisition starts.
+
+Preset names refer to ECG, EMG, EDA, IMU, and PPG. Temperature configuration
+contains a concrete rate but no enabled field because the bridge does not
+expose a temperature enable switch.
+
+PPG configuration contains raw `samples_per_second` and `averaging`; its
+effective output rate is their quotient. JSON profiles can be round-tripped
+with `load_sensor_profile()` and `write_sensor_profile()`. With
+`synthetic=True`, the same background, shared-memory, and recording path runs
+without the bridge, and hardware profiles are rejected.
 
 `SiFiCaptureBackend` is the concrete composition adapter. It owns exactly one
 entered `BackgroundHandle` and the capture started on that handle, including

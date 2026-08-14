@@ -35,6 +35,13 @@ an absolute cursor.
 compatibility projections. Stream addition or removal after startup remains
 out of scope because live layouts are fixed for a capture.
 
+Managed SiFi startup consumes one complete immutable `SiFiSensorProfile`.
+It sends every ECG, EMG, EDA, PPG, IMU, and temperature option on every
+connection—even for disabled sensors—then sends the complete sensor enabled
+state last. The subsequent bridge `info` response must agree with enabled
+states and rates before the fixed stream registry is published. PPG declares
+raw `sps` and averaging separately; its stream rate is `sps / avg`.
+
 The authoritative artifact is an append-only `*.capture.jsonl.zst`.
 `CaptureLogWriter` exclusively creates schema-v2 JSONL in concatenated
 Zstandard frames. Raw packet documents retain all JSON fields. Readers accept

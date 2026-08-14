@@ -3,6 +3,7 @@
 import contextlib
 import json
 import logging
+import math
 import os
 import queue
 import socket
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from sifi_streamer.devices import (
     Modalities,
+    Modality,
     ModalitySpec,
     PacketReader,
     SiFiBandDevice,
@@ -25,10 +27,13 @@ from sifi_streamer.devices import (
     streams_from_modalities,
 )
 from sifi_streamer.exceptions import DeviceError
+from sifi_streamer.sensor_profile import (
+    ALL_SENSORS_PROFILE,
+    SiFiSensorProfile,
+    bridge_configuration_commands,
+)
 
 logger = logging.getLogger(__name__)
-
-EMG_SAMPLE_RATES = frozenset((500, 1000, 1600, 2000))
 
 
 class BridgeTransport(StrEnum):
@@ -121,10 +126,10 @@ class SiFiBridgeDevice:
         executable: Explicit path to the vendor bridge executable.
         startup_timeout_s: Maximum wait for bridge info and TCP readiness.
         transport: Packet transport name or :class:`BridgeTransport` member.
-        emg_sample_rate: Explicit supported EMG rate: 500, 1000, 1600, or 2000 Hz.
+        sensor_profile: Complete sensor state sent before every acquisition.
 
     Raises:
-        ValueError: If ``transport`` or ``emg_sample_rate`` is unsupported.
+        ValueError: If ``transport`` is unsupported.
     """
 
     def __init__(
@@ -134,25 +139,22 @@ class SiFiBridgeDevice:
         executable: str | Path = "bin/sifibridge.exe",
         startup_timeout_s: float = 20.0,
         transport: BridgeTransport | str = BridgeTransport.TCP,
-        emg_sample_rate: int = 1600,
+        sensor_profile: SiFiSensorProfile = ALL_SENSORS_PROFILE,
     ) -> None:
-        if emg_sample_rate not in EMG_SAMPLE_RATES:
-            choices = ", ".join(map(str, sorted(EMG_SAMPLE_RATES)))
-            raise ValueError(f"emg_sample_rate must be one of: {choices}")
         (
             self._host,
             self._port,
             self._transport,
             self._executable,
             self._startup_timeout_s,
-            self._emg_sample_rate,
+            self._sensor_profile,
         ) = (
             host,
             port,
             BridgeTransport(transport),
             Path(executable),
             startup_timeout_s,
-            emg_sample_rate,
+            sensor_profile,
         )
         self._process: subprocess.Popen[str] | None = None
         self._control: queue.Queue[dict[str, object]] = queue.Queue()
@@ -211,18 +213,19 @@ class SiFiBridgeDevice:
             self._reader.connect()
         try:
             logger.info(
-                "Connecting SiFi bridge via %s at %s:%d (EMG %d Hz)",
+                "Connecting SiFi bridge via %s at %s:%d",
                 self._transport,
                 self._host,
                 self._port,
-                self._emg_sample_rate,
             )
             self._launch()
             self._send("connect")
-            self._send(f"configure emg --fs {self._emg_sample_rate}")
+            for command in bridge_configuration_commands(self._sensor_profile):
+                self._send(command)
             self._send("info")
             self._device_info = self._wait_for_info()
             self._modalities = modalities_from_device_info(self._device_info)
+            self._validate_configured_modalities()
             self._send("start")
             if self._transport is BridgeTransport.TCP:
                 self._connect_tcp_when_ready()
@@ -233,6 +236,58 @@ class SiFiBridgeDevice:
             logger.exception("SiFi bridge connection failed")
             self.disconnect()
             raise
+
+    def _validate_configured_modalities(self) -> None:
+        """Require bridge-reported enabled states and rates to match the profile."""
+        expected = (
+            (
+                Modality.ECG,
+                self._sensor_profile.ecg.enabled,
+                self._sensor_profile.ecg.sample_rate_hz,
+            ),
+            (
+                Modality.EMG,
+                self._sensor_profile.emg.enabled,
+                self._sensor_profile.emg.sample_rate_hz,
+            ),
+            (
+                Modality.EDA,
+                self._sensor_profile.eda.enabled,
+                self._sensor_profile.eda.sample_rate_hz,
+            ),
+            (
+                Modality.IMU,
+                self._sensor_profile.imu.enabled,
+                self._sensor_profile.imu.sample_rate_hz,
+            ),
+            (
+                Modality.PPG,
+                self._sensor_profile.ppg.enabled,
+                self._sensor_profile.ppg.effective_sample_rate_hz,
+            ),
+        )
+        for modality, enabled, rate in expected:
+            actual = self.modalities.get(modality)
+            if (actual is not None) != enabled:
+                state = "enabled" if enabled else "disabled"
+                raise DeviceError(
+                    f"Bridge reported {modality.value} in the wrong state; "
+                    f"expected {state}"
+                )
+            if actual is not None and not math.isclose(actual.sample_rate, rate):
+                raise DeviceError(
+                    f"Bridge reported {modality.value} at {actual.sample_rate} Hz; "
+                    f"expected {rate:g} Hz"
+                )
+        temperature = self.modalities.temperature
+        if temperature is not None and not math.isclose(
+            temperature.sample_rate, self._sensor_profile.temperature.sample_rate_hz
+        ):
+            raise DeviceError(
+                f"Bridge reported temperature at {temperature.sample_rate} Hz; "
+                "expected "
+                f"{self._sensor_profile.temperature.sample_rate_hz:g} Hz"
+            )
 
     def disconnect(self) -> None:
         """Orderly stop the reader and bridge, escalating to termination if needed.

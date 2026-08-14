@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
 
-from sifi_streamer.bridge import EMG_SAMPLE_RATES, BridgeTransport, SiFiBridgeDevice
+from sifi_streamer.bridge import BridgeTransport, SiFiBridgeDevice
 from sifi_streamer.capture import Attributes, Scalar, validate_attributes
 from sifi_streamer.client.handle import BackgroundHandle
 from sifi_streamer.config import StreamerConfig
@@ -13,6 +13,7 @@ from sifi_streamer.controller import CaptureController
 from sifi_streamer.devices import DeviceFactory, SyntheticSiFiDevice
 from sifi_streamer.health import HealthThresholds
 from sifi_streamer.monitor import AcquisitionMonitor, CaptureRuntime
+from sifi_streamer.sensor_profile import SiFiSensorProfile
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ def create_sifi_capture(
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.TCP,
-    emg_sample_rate: int = 1600,
+    sensor_profile: SiFiSensorProfile | None = None,
     synthetic: bool = False,
     config: StreamerConfig | None = None,
 ) -> CaptureController:
@@ -130,7 +131,7 @@ def create_sifi_capture(
         host: Bridge TCP destination or local UDP bind interface.
         port: Bridge packet-output port.
         transport: Bridge packet-output transport.
-        emg_sample_rate: Supported explicit EMG sample rate.
+        sensor_profile: Complete hardware profile. Omit for the all-sensors default.
         synthetic: Use generated signals instead of the vendor bridge.
         config: Optional streamer settings; defaults to :class:`StreamerConfig`.
 
@@ -138,13 +139,12 @@ def create_sifi_capture(
         A generic controller that owns the composed SiFi backend.
 
     Raises:
-        ValueError: If ``emg_sample_rate`` is unsupported.
+        ValueError: If a hardware sensor profile is combined with ``synthetic``.
     """
-    if emg_sample_rate not in EMG_SAMPLE_RATES:
-        choices = ", ".join(map(str, sorted(EMG_SAMPLE_RATES)))
-        raise ValueError(f"emg_sample_rate must be one of: {choices}")
+    if synthetic and sensor_profile is not None:
+        raise ValueError("sensor_profile cannot be used with synthetic acquisition")
     factory: DeviceFactory = (
-        partial(SyntheticSiFiDevice, emg_sample_rate=emg_sample_rate)
+        SyntheticSiFiDevice
         if synthetic
         else partial(
             SiFiBridgeDevice,
@@ -152,7 +152,9 @@ def create_sifi_capture(
             port=port,
             executable=bridge_executable,
             transport=transport,
-            emg_sample_rate=emg_sample_rate,
+            **(
+                {"sensor_profile": sensor_profile} if sensor_profile is not None else {}
+            ),
         )
     )
     return CaptureController(
@@ -193,17 +195,16 @@ def create_sifi_capture_runtime(
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.TCP,
-    emg_sample_rate: int = 1600,
+    sensor_profile: SiFiSensorProfile | None = None,
     synthetic: bool = False,
     config: StreamerConfig | None = None,
     thresholds: HealthThresholds | None = None,
 ) -> CaptureRuntime:
     """Compose the standard SiFi device with controller and monitor access."""
-    if emg_sample_rate not in EMG_SAMPLE_RATES:
-        choices = ", ".join(map(str, sorted(EMG_SAMPLE_RATES)))
-        raise ValueError(f"emg_sample_rate must be one of: {choices}")
+    if synthetic and sensor_profile is not None:
+        raise ValueError("sensor_profile cannot be used with synthetic acquisition")
     factory: DeviceFactory = (
-        partial(SyntheticSiFiDevice, emg_sample_rate=emg_sample_rate)
+        SyntheticSiFiDevice
         if synthetic
         else partial(
             SiFiBridgeDevice,
@@ -211,7 +212,9 @@ def create_sifi_capture_runtime(
             port=port,
             executable=bridge_executable,
             transport=transport,
-            emg_sample_rate=emg_sample_rate,
+            **(
+                {"sensor_profile": sensor_profile} if sensor_profile is not None else {}
+            ),
         )
     )
     return create_capture_runtime(

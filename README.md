@@ -19,7 +19,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.3.1" }
+sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.4.0" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential
@@ -72,14 +72,14 @@ pinned by the maintainer.
 ```python
 from pathlib import Path
 
-from sifi_streamer import CaptureLogReader, create_sifi_capture
+from sifi_streamer import CaptureLogReader, EMG_IMU_PROFILE, create_sifi_capture
 
 capture = create_sifi_capture(
     Path("session.capture.jsonl.zst"),
     "session-001",
     {"site": "lab-a"},
     bridge_executable=Path(r"C:\tools\sifibridge.exe"),
-    emg_sample_rate=1600,
+    sensor_profile=EMG_IMU_PROFILE,
 )
 capture.start()
 try:
@@ -122,11 +122,31 @@ The example's trial vocabulary belongs to the consumer, not this package.
 
 ```powershell
 sifi-capture recording.capture.jsonl.zst --capture-id session-001 `
-  --bridge-executable C:\tools\sifibridge.exe --emg-sample-rate 1600
+  --bridge-executable C:\tools\sifibridge.exe --sensor-preset emg-imu
 sifi-capture timed.capture.jsonl.zst --capture-id baseline --duration 300
 sifi-capture notes.capture.jsonl.zst --capture-id annotated --interactive
 sifi-capture-web monitored.capture.jsonl.zst --capture-id session-001
 ```
+
+Hardware capture defaults to a complete all-sensors profile. Every supported
+sensor setting is sent explicitly before acquisition, including settings for
+disabled sensors. Built-in profiles are `all`, `emg-only`, and `emg-imu`.
+Those preset names describe the five switchable sensors; temperature remains
+device-controlled because the bridge exposes its rate but no enabled switch.
+Generate an editable, versioned JSON profile and use it from either launcher:
+
+```powershell
+sifi-sensor-profile create sensors.json --preset all
+sifi-sensor-profile validate sensors.json
+sifi-capture recording.capture.jsonl.zst --capture-id session-001 `
+  --sensor-profile sensors.json
+```
+
+Frequent state and rate settings can be overridden directly with `--ecg on`,
+`--emg-fs 1600`, `--ppg-sps 200`, and `--ppg-avg 4`. PPG has no `fs` setting:
+its effective output rate is `sps / avg`, so the default is `200 / 4 = 50 Hz`.
+Sensor profile options are hardware-only and cannot be combined with
+`--synthetic`.
 
 Interactive commands:
 
@@ -145,9 +165,10 @@ orderly so the capture is flushed.
 
 `sifi-capture-web` starts a loopback-only Python server, prints its URL, and
 opens the default browser unless `--no-open` is supplied. The launcher fixes
-the output and device configuration; the page confirms them, starts/stops one
-capture, displays all declared streams, shows advertised/reported/observed
-rates and missing-data warnings, and provides marker/segment controls.
+the output and device configuration; the page displays the complete resolved
+sensor profile, starts/stops one capture, displays all declared streams, shows
+advertised/reported/observed rates and missing-data warnings, and provides
+marker/segment controls.
 
 Capture and annotation metadata are JSON objects containing simple scalar
 values: text, numbers, booleans, or `null`. They attach searchable facts such as

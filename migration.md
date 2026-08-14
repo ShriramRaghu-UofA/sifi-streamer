@@ -51,3 +51,15 @@ with fixed `SignalStreamSpec` declarations. Prefer dynamic `streams` and
 `stream_readers`; fixed `Modalities` remains a SiFi compatibility view. Web
 consumer launchers pass a runtime factory to `serve_capture_web` rather than
 moving lifecycle ownership into browser code.
+
+## Sensor configuration migration
+
+Replace `emg_sample_rate=...` with a complete `sensor_profile=...`, normally a
+built-in `ALL_SENSORS_PROFILE`, `EMG_ONLY_PROFILE`, or `EMG_IMU_PROFILE`, or a
+profile loaded with `load_sensor_profile()`. The default hardware path uses the
+all-sensors profile. Replace `--emg-sample-rate` with `--emg-fs`, optionally
+combined with `--sensor-preset` or `--sensor-profile`.
+
+Profiles configure every supported option on every startup. PPG uses raw SPS
+and averaging rather than `fs`; the SiFiBand default `200 / 4` produces a 50 Hz
+effective stream rate. Profile options are rejected for synthetic capture.

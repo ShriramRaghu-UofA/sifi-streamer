@@ -7,9 +7,15 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from sifi_streamer.annotation_kinds import AnnotationKindDefinition
-from sifi_streamer.bridge import EMG_SAMPLE_RATES, BridgeTransport
+from sifi_streamer.bridge import BridgeTransport
 from sifi_streamer.health import HealthThresholds
 from sifi_streamer.runner import parse_attributes
+from sifi_streamer.sensor_cli import (
+    add_sensor_arguments,
+    resolve_sensor_profile,
+    sensor_options_used,
+    sensor_profile_summary,
+)
 from sifi_streamer.sifi_backend import create_sifi_capture_runtime
 from sifi_streamer.web import _kind, serve_capture_web
 
@@ -30,9 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--transport", choices=tuple(BridgeTransport), default=BridgeTransport.TCP
     )
-    parser.add_argument(
-        "--emg-sample-rate", type=int, choices=sorted(EMG_SAMPLE_RATES), default=1600
-    )
+    add_sensor_arguments(parser)
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--health-window", type=float, default=5.0)
     parser.add_argument("--stale-after", type=float, default=2.0)
@@ -64,6 +68,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
+    if args.synthetic and sensor_options_used(args):
+        parser.error("sensor profile options cannot be used with --synthetic")
     try:
         thresholds = HealthThresholds(
             args.health_window,
@@ -75,6 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         definitions = _definitions(args.kinds_file)
         attributes = parse_attributes(args.attribute)
+        sensor_profile = None if args.synthetic else resolve_sensor_profile(args)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
 
@@ -87,22 +94,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             host=args.host,
             port=args.port,
             transport=args.transport,
-            emg_sample_rate=args.emg_sample_rate,
+            sensor_profile=sensor_profile,
             synthetic=args.synthetic,
             thresholds=thresholds,
         )
 
+    configuration_summary = {
+        "device": "synthetic" if args.synthetic else "SiFi bridge",
+        "bridge_executable": str(args.bridge_executable),
+        "host": args.host,
+        "port": args.port,
+        "transport": str(args.transport),
+    }
+    if sensor_profile is not None:
+        configuration_summary.update(sensor_profile_summary(sensor_profile))
     serve_capture_web(
         args.output,
         factory,
-        configuration_summary={
-            "device": "synthetic" if args.synthetic else "SiFi bridge",
-            "bridge_executable": str(args.bridge_executable),
-            "host": args.host,
-            "port": args.port,
-            "transport": str(args.transport),
-            "emg_sample_rate": args.emg_sample_rate,
-        },
+        configuration_summary=configuration_summary,
         default_capture_id=args.capture_id,
         default_attributes=attributes,
         thresholds=thresholds,

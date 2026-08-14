@@ -29,6 +29,7 @@ from sifi_streamer.devices import (
     packet_from_json_line,
 )
 from sifi_streamer.exceptions import DeviceError
+from sifi_streamer.sensor_profile import ALL_SENSORS_PROFILE, EMG_ONLY_PROFILE
 
 PACKET = (
     '{"packet_type":"ecg","timestamps":[1.0],"data":{"ecg":[2.5]},"received_at":3.0}'
@@ -101,9 +102,11 @@ class DeviceTests(unittest.TestCase):
             reader.disconnect()
 
     def test_bridge_command_and_rates(self) -> None:
-        self.assertEqual(SiFiBridgeDevice()._emg_sample_rate, 1600)
-        with self.assertRaises(ValueError):
-            SiFiBridgeDevice(emg_sample_rate=123)
+        self.assertEqual(SiFiBridgeDevice()._sensor_profile, ALL_SENSORS_PROFILE)
+        self.assertEqual(
+            SiFiBridgeDevice(sensor_profile=EMG_ONLY_PROFILE)._sensor_profile,
+            EMG_ONLY_PROFILE,
+        )
         for transport, expected in (
             (BridgeTransport.TCP, ["--tcp-out", "127.0.0.1:5000", "--no-stdout-data"]),
             (BridgeTransport.UDP, ["--udp-out", "127.0.0.1:5000", "--no-stdout-data"]),

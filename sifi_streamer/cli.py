@@ -5,12 +5,17 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-from sifi_streamer.bridge import EMG_SAMPLE_RATES, BridgeTransport
+from sifi_streamer.bridge import BridgeTransport
 from sifi_streamer.runner import (
     parse_attributes,
     run_interactive_capture,
     run_timed_capture,
     run_until_interrupt,
+)
+from sifi_streamer.sensor_cli import (
+    add_sensor_arguments,
+    resolve_sensor_profile,
+    sensor_options_used,
 )
 from sifi_streamer.sifi_backend import create_sifi_capture
 
@@ -36,9 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--transport", choices=tuple(BridgeTransport), default=BridgeTransport.TCP
     )
-    parser.add_argument(
-        "--emg-sample-rate", type=int, choices=sorted(EMG_SAMPLE_RATES), default=1600
-    )
+    add_sensor_arguments(parser)
     parser.add_argument(
         "--synthetic", action="store_true", help="Use generated EMG instead of hardware"
     )
@@ -61,6 +64,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--duration must be positive")
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
+    if args.synthetic and sensor_options_used(args):
+        parser.error("sensor profile options cannot be used with --synthetic")
+    try:
+        sensor_profile = None if args.synthetic else resolve_sensor_profile(args)
+    except (OSError, TypeError, ValueError) as exc:
+        parser.error(str(exc))
     controller = create_sifi_capture(
         args.output,
         args.capture_id,
@@ -69,7 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=args.host,
         port=args.port,
         transport=args.transport,
-        emg_sample_rate=args.emg_sample_rate,
+        sensor_profile=sensor_profile,
         synthetic=args.synthetic,
     )
     if args.interactive:

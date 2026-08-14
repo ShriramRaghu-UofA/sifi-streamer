@@ -10,7 +10,8 @@ it contained deliberate fixes:
   new Windows process group or POSIX session;
 - bridge stdin, stdout, and stderr streams close during teardown;
 - acquisition, command, and socket boundaries handle specific expected errors;
-- EMG defaults explicitly to 1600 Hz and permits 500, 1000, 1600, or 2000 Hz;
+- the complete all-sensors profile defaults SiFiBand EMG to 1600 Hz and PPG to
+  200 SPS with averaging 4 for a 50 Hz effective output rate;
 - oversized packet writes retain the newest samples in a ring;
 - modern annotations and useful package-root exports are retained.
 
@@ -40,3 +41,9 @@ boundary rather than a persisted wire format.
 
 Health sidecars and web annotation-kind definitions do not add records to or
 change the meaning of schema-v2 captures.
+
+The former `emg_sample_rate` factory argument was deliberately replaced by the
+complete `sensor_profile` API. The standalone `--emg-sample-rate` option was
+replaced by profile selection plus `--emg-fs`. This is an API/CLI break but not
+a capture-format change. Sensor profiles use strict versioned JSON and bridge
+startup sends every supported setting explicitly for reproducibility.
