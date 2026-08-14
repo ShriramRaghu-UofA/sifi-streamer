@@ -33,6 +33,19 @@ from sifi_streamer.protocol import (
 
 
 class BackgroundHandle:
+    """Own one spawned acquisition worker and its live shared-memory readers.
+
+    Use this class as a context manager. Entering starts the worker, waits for its
+    ready acknowledgement, and attaches readers. Exiting requests orderly
+    shutdown, then terminates a worker that does not exit promptly. The worker
+    owns the device, shared-memory blocks, ring buffers, and recorder.
+
+    Args:
+        config: Settings shared with the worker process.
+        device_factory: Picklable zero-argument factory invoked in the worker.
+        background_log_level: Logging level configured inside the worker.
+    """
+
     def __init__(
         self,
         config: StreamerConfig,
@@ -63,6 +76,15 @@ class BackgroundHandle:
         self._entered = False
 
     def __enter__(self) -> Self:
+        """Start the worker and attach live readers.
+
+        Returns:
+            This entered handle. Re-entering an active handle is a no-op.
+
+        Raises:
+            AckError: If worker initialization reports a specific failure.
+            AckTimeoutError: If the worker is not ready within 30 seconds.
+        """
         if self._entered:
             return self
         self._process.start()
@@ -88,6 +110,7 @@ class BackgroundHandle:
         raise AckTimeoutError("Background process did not send Ready within 30s")
 
     def __exit__(self, *_: object) -> None:
+        """Stop the worker and close all attached readers."""
         if not self._entered:
             return
         try:
@@ -108,6 +131,11 @@ class BackgroundHandle:
 
     @property
     def reader(self) -> SharedMemoryReader:
+        """Return the compatibility EMG reader for the active handle.
+
+        Raises:
+            RuntimeError: If the handle is not entered or EMG is unavailable.
+        """
         if self._readers.emg is None:
             raise RuntimeError(
                 "EMG reader is available only inside the context manager"
@@ -116,12 +144,14 @@ class BackgroundHandle:
 
     @property
     def readers(self) -> Modalities[SharedMemoryReader]:
+        """Return readers for every enabled modality while the handle is entered."""
         if not self._entered:
             raise RuntimeError("readers are available only inside the context manager")
         return self._readers
 
     @property
     def modalities(self) -> Modalities[ModalityInfo]:
+        """Return worker-published shared-memory layouts while entered."""
         if not self._entered:
             raise RuntimeError(
                 "modalities are available only inside the context manager"
@@ -130,29 +160,38 @@ class BackgroundHandle:
 
     @property
     def device_info(self) -> dict[str, object] | None:
+        """Return optional device metadata published during worker startup."""
         return self._device_info
 
     def start_capture(
         self, capture_file: Path, capture_id: str, attributes: Attributes | None = None
     ) -> None:
+        """Create and start an authoritative capture in the worker.
+
+        The mapping is copied before crossing the process boundary. This method
+        returns only after the worker acknowledges creation.
+        """
         self._cmd_queue.put(
             StartCapture(capture_file, capture_id, dict(attributes or {}))
         )
         self._expect(CaptureStarted, "start_capture")
 
     def stop_capture(self, reason: str = "normal_completion") -> None:
+        """Flush and stop the active capture, waiting without an ACK timeout."""
         self._cmd_queue.put(StopCapture(reason))
         self._expect(CaptureStopped, "stop_capture", timeout=None)
 
     def start_segment(
         self, segment_id: str, segment_kind: str, attributes: Attributes | None = None
     ) -> None:
+        """Record a segment start and wait for worker acknowledgement."""
         self._cmd_queue.put(
             StartSegment(segment_id, segment_kind, dict(attributes or {}))
         )
         self._expect(SegmentStarted, "start_segment")
 
     def stop_segment(self, segment_id: str, reason: str | None = None) -> None:
+        """Record a segment stop and wait for worker acknowledgement."""
         self._cmd_queue.put(StopSegment(segment_id, reason))
         self._expect(SegmentStopped, "stop_segment")
 
@@ -165,6 +204,11 @@ class BackgroundHandle:
         source_time_ns: int | None = None,
         source_clock: str | None = None,
     ) -> None:
+        """Record a marker and wait for worker acknowledgement.
+
+        Args follow the stable ``marker_id, marker_kind`` positional order.
+        ``source_time_ns`` may identify time on the optional ``source_clock``.
+        """
         self._cmd_queue.put(
             AddMarker(
                 marker_id,

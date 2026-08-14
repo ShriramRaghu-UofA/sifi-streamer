@@ -5,9 +5,7 @@ from sifi_streamer.controller import CaptureController, NoCaptureController
 from sifi_streamer.exceptions import CaptureInitializationError
 from sifi_streamer.runner import run_capture
 
-type EventPayload = (
-    str | tuple[str, str] | tuple[str, str, dict[str, Scalar]] | None
-)
+type EventPayload = str | tuple[str, str] | tuple[str, str, dict[str, Scalar]] | None
 
 
 class Backend:
@@ -24,9 +22,7 @@ class Backend:
     def stop(self, reason: str = "normal_completion") -> None:
         self.events.append(("stop", reason))
 
-    def start_segment(
-        self, segment_id: str, kind: str, attributes: Attributes
-    ) -> None:
+    def start_segment(self, segment_id: str, kind: str, attributes: Attributes) -> None:
         self.events.append(("segment_start", (segment_id, kind, dict(attributes))))
 
     def stop_segment(self, segment_id: str, reason: str) -> None:

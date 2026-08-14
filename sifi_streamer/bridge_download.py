@@ -54,7 +54,15 @@ class BridgeDownloadError(StreamerError):
 
 @dataclass(frozen=True, slots=True)
 class BridgeAsset:
-    """One release asset selected for the current platform."""
+    """One checksum-bearing bridge release asset.
+
+    Attributes:
+        version: Release tag reported by GitHub or selected by the maintainer.
+        filename: Plain archive filename.
+        url: HTTPS download URL.
+        sha256: Expected lowercase hexadecimal SHA-256 digest.
+        source: Selection mode, such as ``"tested"``, ``"tag"``, or ``"latest"``.
+    """
 
     version: str
     filename: str
@@ -65,7 +73,18 @@ class BridgeAsset:
 
 @dataclass(frozen=True, slots=True)
 class BridgeInstallManifest:
-    """Persistent provenance for an installed bridge executable."""
+    """Persistent provenance written beside an installed bridge executable.
+
+    Attributes:
+        schema_version: Manifest schema version, currently 1.
+        version: Installed bridge release tag.
+        asset: Verified source archive filename.
+        sha256: Verified archive SHA-256 digest.
+        source_url: URL from which the archive was downloaded.
+        release_source: Release selection mode.
+        executable: Installed executable basename.
+        installed_at_utc: ISO-8601 installation time in UTC.
+    """
 
     schema_version: int
     version: str
@@ -81,7 +100,15 @@ def platform_asset_suffix(
     system: str | None = None,
     machine: str | None = None,
 ) -> str:
-    """Return the vendor asset suffix for a supported host platform."""
+    """Return the vendor asset suffix for a supported host platform.
+
+    Args:
+        system: Optional operating-system override; defaults to the current host.
+        machine: Optional architecture override; defaults to the current host.
+
+    Raises:
+        BridgeDownloadError: If no vendor asset supports the normalized pair.
+    """
     operating_system = (system or platform.system()).lower()
     architecture = (machine or platform.machine()).lower()
     normalized_architecture = {
@@ -105,7 +132,11 @@ def platform_asset_suffix(
 
 
 def tested_asset(*, suffix: str | None = None) -> BridgeAsset:
-    """Resolve the maintainer-tested release for this platform."""
+    """Resolve the maintainer-tested release for a platform suffix.
+
+    The asset uses the version and SHA-256 table maintained in this module and
+    does not require GitHub metadata to supply a digest.
+    """
     selected_suffix = suffix or platform_asset_suffix()
     try:
         digest = _TESTED_SHA256[selected_suffix]
@@ -200,7 +231,16 @@ def tagged_asset(
     expected_sha256: str | None = None,
     source: str = "tag",
 ) -> BridgeAsset:
-    """Resolve one tagged release, optionally using a maintainer-pinned digest."""
+    """Resolve one tagged release and require a trustworthy SHA-256 digest.
+
+    With ``expected_sha256``, the URL is constructed directly and the supplied
+    digest is validated. Otherwise GitHub release metadata must contain exactly
+    one matching asset with a valid ``sha256:...`` digest.
+
+    Raises:
+        BridgeDownloadError: If the tag or digest is malformed, metadata cannot
+            be read, or the release asset is ambiguous or unverifiable.
+    """
     if not tag or tag.strip() != tag or any(character in tag for character in "/\\"):
         raise BridgeDownloadError("Release tag must be a non-empty plain tag name")
     selected_suffix = suffix or platform_asset_suffix()
@@ -232,7 +272,10 @@ def tagged_asset(
 
 
 def latest_asset(*, suffix: str | None = None) -> BridgeAsset:
-    """Resolve the latest published asset and require GitHub's SHA-256 digest."""
+    """Resolve the latest published asset and require GitHub's SHA-256 digest.
+
+    This is a network operation and deliberately remains an explicit opt-in.
+    """
     return _asset_from_release(
         _read_json(LATEST_RELEASE_API),
         suffix or platform_asset_suffix(),
@@ -313,7 +356,26 @@ def install_bridge(
     tag: str | None = None,
     force: bool = False,
 ) -> tuple[Path, Path]:
-    """Download, verify, and install a bridge selected for the current host."""
+    """Download, verify, and install a bridge selected for the current host.
+
+    Exactly one expected executable is extracted from a size-constrained archive.
+    A provenance manifest is written beside it. Existing output is preserved
+    unless ``force`` is true.
+
+    Args:
+        output_directory: Directory in which to install the executable and manifest.
+        latest: Select GitHub's latest digest-bearing release.
+        tag: Select a specific digest-bearing release tag.
+        force: Permit replacement of existing installation files.
+
+    Returns:
+        ``(executable_path, manifest_path)`` after successful installation.
+
+    Raises:
+        BridgeDownloadError: For conflicting selection, unsupported platforms,
+            network or archive errors, checksum mismatch, unsafe archive content,
+            or overwrite refusal.
+    """
     if latest and tag is not None:
         raise BridgeDownloadError("latest and tag release selections conflict")
     if latest:
@@ -375,6 +437,7 @@ def install_bridge(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the ``sifi-download-bridge`` command-line parser."""
     parser = argparse.ArgumentParser(
         description="Explicitly download and verify a SiFi bridge release."
     )
@@ -409,6 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the explicit bridge installer CLI and return zero on success."""
     args = build_parser().parse_args(argv)
     try:
         executable, manifest = install_bridge(

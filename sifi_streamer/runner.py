@@ -17,6 +17,11 @@ INTERACTIVE_HELP = """Commands:
 
 
 def parse_scalar(value: str) -> Scalar:
+    """Parse a command-line scalar without evaluating arbitrary expressions.
+
+    Case-insensitive booleans and nulls are recognized first, followed by base-10
+    integers and floats. Every other value remains a string.
+    """
     if value.lower() in {"true", "false"}:
         return value.lower() == "true"
     if value.lower() in {"none", "null"}:
@@ -31,6 +36,11 @@ def parse_scalar(value: str) -> Scalar:
 
 
 def parse_attributes(tokens: Sequence[str]) -> dict[str, Scalar]:
+    """Parse unique ``key=value`` tokens into scalar annotations.
+
+    Raises:
+        ValueError: If a token has no non-empty key or a key occurs more than once.
+    """
     result: dict[str, Scalar] = {}
     for token in tokens:
         key, separator, value = token.partition("=")
@@ -48,6 +58,17 @@ def interactive_annotations(
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
 ) -> None:
+    """Read interactive marker and segment commands until ``stop`` or EOF.
+
+    Invalid commands and controller validation errors are reported through
+    ``output_fn`` and do not end the loop. ``shlex`` parsing permits quoted IDs,
+    kinds, and values.
+
+    Args:
+        controller: Already-started controller owned by the caller.
+        input_fn: Injectable prompt function, primarily for tests and UIs.
+        output_fn: Injectable line-output function.
+    """
     output_fn(INTERACTIVE_HELP)
     while True:
         try:
@@ -82,7 +103,14 @@ def interactive_annotations(
 def run_capture(
     controller: CaptureController, action: Callable[[CaptureController], None]
 ) -> str:
-    """Own startup and exactly one controlled close around *action*."""
+    """Own startup and exactly one controlled close around ``action``.
+
+    A keyboard interrupt is consumed and mapped to ``"operator_interrupt"``.
+    Other exceptions propagate after closing with ``"aborted"``.
+
+    Returns:
+        The reason passed to :meth:`CaptureController.close`.
+    """
     reason = "normal_completion"
     try:
         controller.start()
@@ -103,6 +131,10 @@ def run_timed_capture(
     *,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
+    """Run a capture for a positive duration and return its close reason.
+
+    ``sleep`` is injectable so tests need not wait in real time.
+    """
     if duration_s <= 0:
         raise ValueError("duration_s must be positive")
     return run_capture(controller, lambda _: sleep(duration_s))
@@ -111,7 +143,10 @@ def run_timed_capture(
 def run_until_interrupt(
     controller: CaptureController, *, sleep: Callable[[float], None] = time.sleep
 ) -> str:
+    """Run until Ctrl+C, then close cleanly with ``operator_interrupt``."""
+
     def wait(_: CaptureController) -> None:
+        """Sleep cooperatively until interrupted by the operator."""
         while True:
             sleep(1)
 
@@ -124,6 +159,7 @@ def run_interactive_capture(
     input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
 ) -> str:
+    """Own a capture around :func:`interactive_annotations`."""
     return run_capture(
         controller,
         lambda capture: interactive_annotations(

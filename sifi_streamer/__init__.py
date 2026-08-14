@@ -1,4 +1,10 @@
-"""Reusable SiFi acquisition and capture package."""
+"""Public API for reusable SiFi acquisition and authoritative capture logging.
+
+The package exposes three principal layers: device-neutral capture records and
+controllers, SiFi-specific live acquisition, and explicit vendor-bridge
+installation. Most consumers should import from this module and construct a
+controller with :func:`create_sifi_capture`.
+"""
 
 from sifi_streamer.bridge import EMG_SAMPLE_RATES, BridgeTransport, SiFiBridgeDevice
 from sifi_streamer.bridge_download import (

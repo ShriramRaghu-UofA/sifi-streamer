@@ -11,6 +11,21 @@ _HEADER_BYTES = 16
 
 
 class SeqlockRingBuffer:
+    """Expose a fixed-size shared-memory sample ring guarded by a sequence lock.
+
+    The 16-byte header stores a write counter and next-write head. Odd counters
+    indicate an in-progress write; equal even counters around a copy identify a
+    coherent snapshot. Writes larger than capacity retain their newest rows.
+
+    Args:
+        n_samples: Positive row capacity.
+        n_channels: Positive column count.
+        shm: Existing block large enough for the header and payload.
+        dtype: Non-object scalar NumPy dtype.
+        is_owner: Initialize header and payload when true; attach unchanged when
+            false.
+    """
+
     def __init__(
         self,
         n_samples: int,
@@ -54,25 +69,35 @@ class SeqlockRingBuffer:
     def required_bytes(
         n_samples: int, n_channels: int, *, dtype: npt.DTypeLike = np.float32
     ) -> int:
+        """Return shared-memory bytes required for a layout and dtype."""
         return _HEADER_BYTES + n_samples * n_channels * np.dtype(dtype).itemsize
 
     @property
     def n_samples(self) -> int:
+        """Return ring capacity in rows."""
         return self._n_samples
 
     @property
     def n_channels(self) -> int:
+        """Return sample column count."""
         return self._n_channels
 
     @property
     def dtype(self) -> np.dtype:
+        """Return the normalized payload dtype."""
         return self._dtype
 
     @property
     def shm_name(self) -> str:
+        """Return the backing shared-memory block name."""
         return self._shm.name
 
     def write_samples(self, samples: np.ndarray) -> None:
+        """Append a 2-D sample matrix, retaining newest rows on overflow.
+
+        Raises:
+            ValueError: If ``samples`` is not shaped ``(time, n_channels)``.
+        """
         if samples.ndim != 2 or samples.shape[1] != self._n_channels:
             raise ValueError(
                 f"Expected shape (T, {self._n_channels}); got {samples.shape!r}"
@@ -91,15 +116,19 @@ class SeqlockRingBuffer:
         self._counter[0] += 1
 
     def read_counter(self) -> int:
+        """Return the current sequence-lock counter."""
         return int(self._counter[0])
 
     def read_head(self) -> int:
+        """Return the index at which the next row will be written."""
         return int(self._head[0])
 
     def copy_ring(self) -> np.ndarray:
+        """Return an un-ordered physical copy of the ring payload."""
         return self._ring.copy()
 
     def close(self) -> None:
+        """Release NumPy views so the shared-memory owner can close the block."""
         self._counter = np.empty(0, dtype=np.uint64)
         self._head = np.empty(0, dtype=np.uint32)
         self._ring = np.empty((0, 0), dtype=self._dtype)

@@ -1,4 +1,14 @@
-"""Authoritative append-only JSON Lines captures in Zstandard frames."""
+"""Read and write authoritative SiFi capture logs.
+
+Capture files contain newline-terminated schema-version-2 JSON records in one
+or more concatenated Zstandard frames.  Writers create files exclusively and
+append records; readers never repair or mutate a capture.  This module also
+defines the device-neutral record model used by the rest of the package.
+
+Annotation values are deliberately limited to JSON-compatible scalars.  Raw
+packet documents, by contrast, retain complete finite JSON objects so unknown
+device fields survive a decode-and-encode round trip.
+"""
 
 import json
 import math
@@ -31,6 +41,15 @@ class CaptureLifecycleError(CaptureError):
 
 @dataclass(frozen=True, slots=True)
 class _Record:
+    """Fields common to every wire record.
+
+    Attributes:
+        schema_version: Capture schema version.  Version 2 is currently supported.
+        sequence: Zero-based position of the record in its capture.
+        host_monotonic_ns: Host monotonic-clock time when the record was created.
+        host_unix_ns: Host Unix-epoch time in nanoseconds.
+    """
+
     schema_version: int
     sequence: int
     host_monotonic_ns: int
@@ -39,12 +58,27 @@ class _Record:
 
 @dataclass(frozen=True, slots=True)
 class RawPacket(_Record):
+    """A complete JSON packet received from the acquisition device.
+
+    Attributes:
+        packet: Finite JSON object, including fields unknown to this package.
+        record_type: Stable wire discriminator, always ``"raw_packet"``.
+    """
+
     packet: Packet
     record_type: Literal["raw_packet"] = "raw_packet"
 
 
 @dataclass(frozen=True, slots=True)
 class CaptureStarted(_Record):
+    """The first record in a capture.
+
+    Attributes:
+        capture_id: Non-empty identifier for this capture occurrence.
+        attributes: Device-neutral scalar metadata copied at validation time.
+        record_type: Stable wire discriminator, always ``"capture_started"``.
+    """
+
     capture_id: str
     attributes: Attributes
     record_type: Literal["capture_started"] = "capture_started"
@@ -52,12 +86,28 @@ class CaptureStarted(_Record):
 
 @dataclass(frozen=True, slots=True)
 class CaptureStopped(_Record):
+    """The terminal record of a normally closed capture.
+
+    Attributes:
+        reason: Non-empty machine-readable reason for stopping.
+        record_type: Stable wire discriminator, always ``"capture_stopped"``.
+    """
+
     reason: str
     record_type: Literal["capture_stopped"] = "capture_stopped"
 
 
 @dataclass(frozen=True, slots=True)
 class SegmentStarted(_Record):
+    """The authoritative start boundary of a generic duration segment.
+
+    Attributes:
+        segment_id: Identifier for this segment occurrence.
+        segment_kind: Stable category assigned by the consumer.
+        attributes: Device-neutral scalar metadata.
+        record_type: Stable wire discriminator, always ``"segment_started"``.
+    """
+
     segment_id: str
     segment_kind: str
     attributes: Attributes
@@ -66,6 +116,14 @@ class SegmentStarted(_Record):
 
 @dataclass(frozen=True, slots=True)
 class SegmentStopped(_Record):
+    """The authoritative stop boundary of a generic duration segment.
+
+    Attributes:
+        segment_id: Identifier of the corresponding open segment.
+        reason: Optional machine-readable completion reason.
+        record_type: Stable wire discriminator, always ``"segment_stopped"``.
+    """
+
     segment_id: str
     reason: str | None
     record_type: Literal["segment_stopped"] = "segment_stopped"
@@ -73,6 +131,17 @@ class SegmentStopped(_Record):
 
 @dataclass(frozen=True, slots=True)
 class Marker(_Record):
+    """A point-in-time fact recorded during a capture.
+
+    Attributes:
+        marker_id: Identifier for this marker occurrence.
+        marker_kind: Stable category assigned by the consumer.
+        attributes: Device-neutral scalar metadata.
+        source_time_ns: Optional timestamp from an external source clock.
+        source_clock: Optional name of the clock used by ``source_time_ns``.
+        record_type: Stable wire discriminator, always ``"marker"``.
+    """
+
     marker_id: str
     marker_kind: str
     attributes: Attributes
@@ -104,7 +173,22 @@ def _require_int(value: object, name: str) -> int:
 
 
 def validate_attributes(value: object) -> dict[str, Scalar]:
-    """Validate and defensively copy scalar annotations."""
+    """Validate and defensively copy a scalar annotation mapping.
+
+    Keys must be non-empty strings. Values may be strings, integers, finite
+    floats, booleans, or ``None``; nested containers and non-finite floats are
+    rejected.
+
+    Args:
+        value: Candidate annotation mapping.
+
+    Returns:
+        A new dictionary containing the validated values.
+
+    Raises:
+        CaptureDecodeError: If ``value`` is not a mapping or contains an invalid
+            key or value.
+    """
     if not isinstance(value, Mapping):
         raise CaptureDecodeError("attributes must be a mapping")
     result: dict[str, Scalar] = {}
@@ -138,6 +222,12 @@ def _packet(value: object) -> dict[str, object]:
 
 
 def record_to_wire_map(record: CaptureRecord) -> dict[str, object]:
+    """Convert a typed capture record to its schema-version-2 wire mapping.
+
+    The returned mapping is newly allocated, including copies of attribute and
+    packet mappings.  Call :func:`encode_record` when validation and JSONL bytes
+    are required.
+    """
     value: dict[str, object] = {
         "schema_version": record.schema_version,
         "sequence": record.sequence,
@@ -178,6 +268,12 @@ def record_to_wire_map(record: CaptureRecord) -> dict[str, object]:
 
 
 def encode_record(record: CaptureRecord) -> bytes:
+    """Validate and encode one capture record as newline-terminated UTF-8 JSON.
+
+    Raises:
+        CaptureDecodeError: If any record field violates the wire schema.
+        TypeError: If ``record`` is not one of the supported record dataclasses.
+    """
     value = record_to_wire_map(record)
     decode_record(value)
     return (
@@ -187,6 +283,21 @@ def encode_record(record: CaptureRecord) -> bytes:
 
 
 def decode_record(value: object) -> CaptureRecord:
+    """Decode and validate one schema-version-2 wire mapping.
+
+    Unknown fields on known record types are ignored for forward compatibility.
+    Unknown record types and unsupported schema versions are rejected.
+
+    Args:
+        value: Parsed JSON value expected to contain a capture record object.
+
+    Returns:
+        The corresponding typed record.
+
+    Raises:
+        CaptureDecodeError: If required fields are missing or invalid, the schema
+            version is unsupported, or the record type is unknown.
+    """
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise CaptureDecodeError("record must be an object with string keys")
     required = (
@@ -205,9 +316,7 @@ def decode_record(value: object) -> CaptureRecord:
     if schema != SCHEMA_VERSION:
         raise CaptureDecodeError(f"unsupported schema_version {schema}")
     sequence = _require_int(value["sequence"], "sequence")
-    host_monotonic_ns = _require_int(
-        value["host_monotonic_ns"], "host_monotonic_ns"
-    )
+    host_monotonic_ns = _require_int(value["host_monotonic_ns"], "host_monotonic_ns")
     host_unix_ns = _require_int(value["host_unix_ns"], "host_unix_ns")
     record_type = _require_string(value["record_type"], "record_type")
     match record_type:
@@ -281,7 +390,29 @@ def decode_record(value: object) -> CaptureRecord:
 
 
 class CaptureLogWriter:
-    """Append schema-v2 records without rewriting an existing capture."""
+    """Create and append to one authoritative schema-version-2 capture.
+
+    Construction exclusively creates ``path`` and immediately writes a
+    :class:`CaptureStarted` record.  Boundary records force a Zstandard frame
+    flush; packet records are batched by size and time.  The writer is not
+    thread-safe—serialize calls at a higher layer, as :class:`RecorderFSM` does.
+
+    Args:
+        path: New ``*.capture.jsonl.zst`` path. Existing files are never replaced.
+        capture_id: Non-empty identifier for this capture occurrence.
+        attributes: Optional scalar capture metadata.
+        frame_target_bytes: Approximate uncompressed batch size before flushing.
+        flush_interval_s: Maximum time between flush opportunities while records
+            continue to arrive.
+        compression_level: Optional Zstandard compression level.
+        fsync_on_boundary: Whether boundary flushes also synchronize the file.
+        monotonic_ns: Injectable monotonic nanosecond clock.
+        unix_ns: Injectable Unix-epoch nanosecond clock.
+
+    Raises:
+        FileExistsError: If ``path`` already exists.
+        ValueError: If batching settings or initial fields are invalid.
+    """
 
     def __init__(
         self,
@@ -336,6 +467,7 @@ class CaptureLogWriter:
         return record.sequence
 
     def append_packet(self, packet: Packet) -> int:
+        """Append a complete finite-JSON packet and return its sequence number."""
         return self._append(
             RawPacket(
                 schema_version=SCHEMA_VERSION,
@@ -349,6 +481,13 @@ class CaptureLogWriter:
     def start_segment(
         self, segment_id: str, segment_kind: str, attributes: Attributes | None = None
     ) -> int:
+        """Append a segment start and return its sequence number.
+
+        Raises:
+            CaptureLifecycleError: If the writer is closed or ``segment_id`` is
+                already open.
+            CaptureDecodeError: If identifiers or attributes are invalid.
+        """
         segment_id, segment_kind = (
             _require_string(segment_id, "segment_id"),
             _require_string(segment_kind, "segment_kind"),
@@ -371,6 +510,12 @@ class CaptureLogWriter:
         )
 
     def stop_segment(self, segment_id: str, reason: str | None = None) -> int:
+        """Append a segment stop and return its sequence number.
+
+        Raises:
+            CaptureLifecycleError: If ``segment_id`` is not open or the writer is
+                closed.
+        """
         if segment_id not in self._open_segments:
             raise CaptureLifecycleError(f"segment {segment_id!r} is not open")
         self._open_segments.remove(segment_id)
@@ -395,6 +540,11 @@ class CaptureLogWriter:
         source_time_ns: int | None = None,
         source_clock: str | None = None,
     ) -> int:
+        """Append a marker and return its sequence number.
+
+        ``source_time_ns`` and ``source_clock`` describe an optional external
+        timestamp; host timestamps are always populated independently.
+        """
         marker_id, marker_kind = (
             _require_string(marker_id, "marker_id"),
             _require_string(marker_kind, "marker_kind"),
@@ -416,6 +566,11 @@ class CaptureLogWriter:
         )
 
     def flush(self, *, boundary: bool = False) -> None:
+        """Compress and write buffered records as one Zstandard frame.
+
+        Args:
+            boundary: Synchronize the file when boundary fsync is enabled.
+        """
         if not self._buffer:
             return
         self._file.write(zstd.compress(bytes(self._buffer), level=self._level))
@@ -426,6 +581,14 @@ class CaptureLogWriter:
         self._last_flush_ns = self._monotonic_ns()
 
     def close(self, reason: str = "normal_completion") -> None:
+        """Append the terminal record, flush, and close the file.
+
+        The operation is idempotent after a successful close. Open segments must
+        be stopped by their owner before the capture can close.
+
+        Raises:
+            CaptureLifecycleError: If any segment remains open.
+        """
         if self._closed:
             return
         if self._open_segments:
@@ -456,12 +619,27 @@ class CaptureLogWriter:
 
 
 class CaptureLogReader:
-    """Stream and lifecycle-validate records from concatenated Zstandard frames."""
+    """Stream records from a capture while validating schema and lifecycle.
+
+    Iteration validates contiguous sequence numbers, capture start/stop ordering,
+    and segment pairing.  A crash-truncated capture may omit its terminal record;
+    records decoded before a malformed or incomplete record are still yielded.
+
+    Args:
+        path: Existing capture file to open read-only during iteration.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path
 
     def __iter__(self) -> Iterator[CaptureRecord]:
+        """Yield validated records in wire order.
+
+        Raises:
+            CaptureDecodeError: If compression, JSON, schema, or sequencing is
+                invalid.
+            CaptureLifecycleError: If capture or segment ordering is invalid.
+        """
         expected, started, stopped, open_segments = 0, False, False, set()
         try:
             with zstd.open(self.path, "rb") as file:

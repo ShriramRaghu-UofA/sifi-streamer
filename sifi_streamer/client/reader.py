@@ -11,6 +11,18 @@ from sifi_streamer.exceptions import StaleDataError
 
 
 class SharedMemoryReader:
+    """Read coherent recent windows from one worker-owned modality ring.
+
+    The reader attaches to, but does not unlink, an existing shared-memory block.
+    Each successful read advances this reader's freshness counter.
+
+    Args:
+        shm_name: Existing operating-system shared-memory name.
+        n_samples: Ring capacity in rows.
+        n_channels: Number of signal columns.
+        dtype: NumPy-compatible payload dtype used by the writer.
+    """
+
     def __init__(
         self,
         shm_name: str,
@@ -27,24 +39,46 @@ class SharedMemoryReader:
 
     @property
     def n_samples(self) -> int:
+        """Return the ring capacity in samples."""
         return self._ring.n_samples
 
     @property
     def n_channels(self) -> int:
+        """Return the number of columns in each sample."""
         return self._ring.n_channels
 
     @property
     def dtype(self) -> np.dtype:
+        """Return the shared payload dtype."""
         return self._ring.dtype
 
     @property
     def has_new_data(self) -> bool:
+        """Return whether a completed write occurred since the last window read."""
         counter = self._ring.read_counter()
         return counter != self._last_counter and counter % 2 == 0
 
     def read_window(
         self, n_samples: int, *, raise_on_stale: bool = False
     ) -> np.ndarray | None:
+        """Copy the newest ``n_samples`` rows in chronological order.
+
+        The method retries a bounded number of times if a concurrent writer makes
+        a snapshot inconsistent. ``None`` means no fresh coherent window was
+        available.
+
+        Args:
+            n_samples: Positive window length no larger than ring capacity.
+            raise_on_stale: Raise instead of returning ``None`` when the ring has
+                not changed since this reader's previous successful call.
+
+        Returns:
+            A copied ``(n_samples, n_channels)`` array, or ``None``.
+
+        Raises:
+            ValueError: If the requested window is non-positive or too large.
+            StaleDataError: If data is unchanged and ``raise_on_stale`` is true.
+        """
         if n_samples <= 0:
             raise ValueError("n_samples must be positive")
         capacity = self._ring.n_samples
@@ -79,6 +113,7 @@ class SharedMemoryReader:
         return None
 
     def close(self) -> None:
+        """Release local NumPy views and close this shared-memory attachment."""
         self._ring.close()
         self._shm.close()
 

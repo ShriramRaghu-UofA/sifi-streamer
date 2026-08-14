@@ -17,7 +17,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.2.0" }
+sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.2.1" }
 ```
 
 Use an immutable tag or commit in production.
@@ -151,5 +151,5 @@ concatenated Zstandard frames. New files use exclusive creation and are never
 rewritten. Optional Parquet dependencies are available with
 `sifi-streamer[parquet]`; conversion is not authoritative.
 
-See [architecture.md](architecture.md), [migration.md](migration.md), and
-[compatibility.md](compatibility.md).
+See the [Python API reference](api.md), [architecture.md](architecture.md),
+[migration.md](migration.md), and [compatibility.md](compatibility.md).

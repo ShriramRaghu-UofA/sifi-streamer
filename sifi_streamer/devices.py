@@ -1,4 +1,9 @@
-"""SiFi modalities, packet model, real TCP reader, and synthetic device."""
+"""Model SiFi modalities, packets, device protocols, and device implementations.
+
+Live acquisition is intentionally SiFi-shaped: each known modality has a fixed
+slot and channel layout.  Consumers can inject any structural :class:`SiFiDevice`
+implementation, including :class:`SyntheticSiFiDevice` for hardware-free runs.
+"""
 
 import contextlib
 import json
@@ -17,20 +22,32 @@ from sifi_streamer.exceptions import DeviceError
 
 @dataclass(frozen=True, slots=True)
 class ModalitySpec:
+    """Static layout of one enabled signal modality.
+
+    Attributes:
+        channels: Ordered channel names used to build sample matrices.
+        sample_rate: Nominal samples per second.
+        dtype: NumPy-compatible scalar payload type.
+    """
+
     channels: tuple[str, ...]
     sample_rate: int
     dtype: npt.DTypeLike = np.float32
 
     @property
     def n_channels(self) -> int:
+        """Return the number of channels in the modality."""
         return len(self.channels)
 
     @property
     def numpy_dtype(self) -> np.dtype:
+        """Return ``dtype`` normalized as a NumPy dtype."""
         return np.dtype(self.dtype)
 
 
 class Modality(StrEnum):
+    """Signal modality identifiers emitted by SiFi packet documents."""
+
     EMG = "emg_armband"
     IMU = "imu"
     ECG = "ecg"
@@ -41,6 +58,20 @@ class Modality(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Modalities[T]:
+    """Fixed-shape optional values keyed by :class:`Modality`.
+
+    A ``None`` slot means that the modality is disabled or unavailable. Instances
+    are immutable; :meth:`with_value` returns a modified copy.
+
+    Attributes:
+        emg: Value associated with :attr:`Modality.EMG`.
+        imu: Value associated with :attr:`Modality.IMU`.
+        ecg: Value associated with :attr:`Modality.ECG`.
+        eda: Value associated with :attr:`Modality.EDA`.
+        ppg: Value associated with :attr:`Modality.PPG`.
+        temperature: Value associated with :attr:`Modality.TEMPERATURE`.
+    """
+
     emg: T | None = None
     imu: T | None = None
     ecg: T | None = None
@@ -49,25 +80,37 @@ class Modalities[T]:
     temperature: T | None = None
 
     def get(self, modality: Modality) -> T | None:
+        """Return the value for ``modality``, or ``None`` when disabled."""
         return getattr(self, "emg" if modality is Modality.EMG else modality.value)
 
     def require(self, modality: Modality) -> T:
+        """Return an enabled value.
+
+        Raises:
+            LookupError: If ``modality`` is disabled.
+        """
         if (value := self.get(modality)) is None:
             raise LookupError(f"{modality.value} is not enabled")
         return value
 
     def with_value(self, modality: Modality, value: T) -> Modalities[T]:
+        """Return a copy with ``value`` assigned to ``modality``."""
         return replace(
             self, **{"emg" if modality is Modality.EMG else modality.value: value}
         )
 
     def enabled(self) -> Iterator[tuple[Modality, T]]:
+        """Yield enabled ``(modality, value)`` pairs in enum order."""
         for modality in Modality:
             if (value := self.get(modality)) is not None:
                 yield modality, value
 
     @classmethod
     def from_enabled(cls, values: Iterator[tuple[Modality, T]]) -> Modalities[T]:
+        """Build an instance from enabled ``(modality, value)`` pairs.
+
+        Later duplicate modalities replace earlier values.
+        """
         result = cls()
         for modality, value in values:
             result = result.with_value(modality, value)
@@ -86,6 +129,15 @@ SIGNAL_MODALITIES = tuple(Modality)
 
 
 def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[ModalitySpec]:
+    """Derive enabled modality layouts from a bridge ``info`` document.
+
+    EMG, ECG, EDA, IMU, and temperature use the bridge ``fs`` value. PPG uses
+    ``sps / avg``. Channel names come from :data:`DEFAULT_MODALITIES`.
+
+    Raises:
+        DeviceError: If the document shape is invalid or contains no enabled
+            signal modalities.
+    """
     root = info.get("info", info)
     if not isinstance(root, Mapping):
         raise DeviceError("Bridge info is invalid")
@@ -134,6 +186,19 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
 
 @dataclass(slots=True)
 class SiFiPacket:
+    """One packet read from a SiFi-compatible device.
+
+    Attributes:
+        packet_type: Vendor packet type; known signal types map to a modality.
+        timestamps: Per-sample source timestamps.
+        data: Channel names mapped to sample values.
+        received_at: Host wall-clock time at receipt, in seconds.
+        sample_rate: Optional sample rate reported by the packet.
+        samples_lost: Device-reported lost-sample count.
+        status: Device-reported packet status.
+        document: Original decoded JSON object, retained for authoritative capture.
+    """
+
     packet_type: str
     timestamps: list[float]
     data: dict[str, list[float]]
@@ -145,12 +210,18 @@ class SiFiPacket:
 
     @property
     def modality(self) -> Modality | None:
+        """Return the known signal modality, or ``None`` for other packets."""
         try:
             return Modality(self.packet_type)
         except ValueError:
             return None
 
     def capture_document(self) -> dict[str, object]:
+        """Return the complete document that should be written to a capture.
+
+        The original document is returned unchanged when available. Programmatic
+        packets receive a document assembled from their typed fields.
+        """
         return (
             self.document
             if self.document is not None
@@ -168,31 +239,70 @@ class SiFiPacket:
 
 @runtime_checkable
 class SiFiDevice(Protocol):
-    def connect(self) -> None: ...
-    def disconnect(self) -> None: ...
-    def read_packet(self) -> SiFiPacket: ...
+    """Structural interface owned by the background acquisition worker."""
+
+    def connect(self) -> None:
+        """Acquire transport resources and prepare packet streaming."""
+        ...
+
+    def disconnect(self) -> None:
+        """Stop streaming and release all transport resources."""
+        ...
+
+    def read_packet(self) -> SiFiPacket:
+        """Block until and return the next valid packet."""
+        ...
+
     @property
-    def modalities(self) -> Modalities[ModalitySpec]: ...
+    def modalities(self) -> Modalities[ModalitySpec]:
+        """Return layouts for all enabled signal modalities."""
+        ...
+
     @property
-    def device_info(self) -> dict[str, object] | None: ...
+    def device_info(self) -> dict[str, object] | None:
+        """Return optional vendor device metadata."""
+        ...
 
 
 @runtime_checkable
 class PacketReader(Protocol):
-    def connect(self) -> None: ...
-    def disconnect(self) -> None: ...
-    def read_packet(self) -> SiFiPacket: ...
+    """Minimal packet transport used by :class:`SiFiBridgeDevice`."""
+
+    def connect(self) -> None:
+        """Open the packet transport."""
+        ...
+
+    def disconnect(self) -> None:
+        """Close the packet transport."""
+        ...
+
+    def read_packet(self) -> SiFiPacket:
+        """Return the next valid packet."""
+        ...
 
 
 type DeviceFactory = Callable[[], SiFiDevice]
 
 
 class _BinaryLineReader(Protocol):
-    def readline(self) -> bytes: ...
-    def close(self) -> None: ...
+    """Private structural interface for a binary newline reader."""
+
+    def readline(self) -> bytes:
+        """Read through the next newline or end of stream."""
+        ...
+
+    def close(self) -> None:
+        """Release the underlying stream."""
+        ...
 
 
 def packet_from_json_line(line: str | bytes) -> SiFiPacket | None:
+    """Parse one bridge JSON line into a packet.
+
+    Returns ``None`` for malformed JSON or non-object JSON. Missing packet fields
+    receive conservative defaults, and the original object is retained on the
+    resulting packet.
+    """
     try:
         raw = json.loads(line)
     except json.JSONDecodeError, UnicodeDecodeError:
@@ -212,6 +322,17 @@ def packet_from_json_line(line: str | bytes) -> SiFiPacket | None:
 
 
 class SiFiBandDevice:
+    """Read newline-delimited SiFi packet JSON from a TCP endpoint.
+
+    This low-level device assumes the default modality layout and does not manage
+    or configure a bridge process. Use :class:`~sifi_streamer.SiFiBridgeDevice`
+    when the package should own the vendor bridge.
+
+    Args:
+        host: Interface or host serving packet data.
+        port: TCP port serving packet data.
+    """
+
     def __init__(self, host: str = "127.0.0.1", port: int = 5000) -> None:
         self._host, self._port = host, port
         self._sock: socket.socket | None = None
@@ -219,13 +340,16 @@ class SiFiBandDevice:
 
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
+        """Return the default SiFi modality layouts."""
         return DEFAULT_MODALITIES
 
     @property
     def device_info(self) -> None:
+        """Return ``None`` because the raw TCP stream has no info handshake."""
         return None
 
     def connect(self) -> None:
+        """Connect to the configured TCP endpoint; repeated calls are no-ops."""
         if self._file is not None:
             return
         try:
@@ -237,6 +361,7 @@ class SiFiBandDevice:
             ) from exc
 
     def disconnect(self) -> None:
+        """Close the socket and file wrapper; repeated calls are safe."""
         for resource in (self._file, self._sock):
             if resource is not None:
                 with contextlib.suppress(OSError):
@@ -245,6 +370,11 @@ class SiFiBandDevice:
         self._sock = None
 
     def read_packet(self) -> SiFiPacket:
+        """Return the next decodable packet, skipping malformed lines.
+
+        Raises:
+            DeviceError: If called before connection or the socket fails/closes.
+        """
         if self._file is None:
             raise DeviceError("SiFiBandDevice.read_packet() called before connect()")
         while True:
@@ -259,7 +389,15 @@ class SiFiBandDevice:
 
 
 class SyntheticSiFiDevice:
-    """Deterministic multi-modal development device."""
+    """Deterministic hardware-free SiFi device that produces EMG packets.
+
+    The device advertises the default modality layout but currently emits one
+    eight-channel sinusoidal EMG sample per :meth:`read_packet` call.
+
+    Args:
+        emg_sample_rate: Positive generated EMG rate in samples per second.
+        amplitude: Peak amplitude of generated channel sinusoids.
+    """
 
     def __init__(self, emg_sample_rate: int = 1600, amplitude: float = 100.0) -> None:
         if emg_sample_rate <= 0:
@@ -273,6 +411,7 @@ class SyntheticSiFiDevice:
 
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
+        """Return default layouts with the configured EMG sample rate."""
         return DEFAULT_MODALITIES.with_value(
             Modality.EMG,
             ModalitySpec(DEFAULT_MODALITIES.require(Modality.EMG).channels, self._rate),
@@ -280,15 +419,23 @@ class SyntheticSiFiDevice:
 
     @property
     def device_info(self) -> None:
+        """Return ``None`` because no physical-device metadata exists."""
         return None
 
     def connect(self) -> None:
+        """Reset generated time to zero and enable packet reads."""
         self._t, self._connected = 0.0, True
 
     def disconnect(self) -> None:
+        """Disable packet reads."""
         self._connected = False
 
     def read_packet(self) -> SiFiPacket:
+        """Wait one sample interval and return the next EMG packet.
+
+        Raises:
+            DeviceError: If called before :meth:`connect`.
+        """
         if not self._connected:
             raise DeviceError(
                 "SyntheticSiFiDevice.read_packet() called before connect()"

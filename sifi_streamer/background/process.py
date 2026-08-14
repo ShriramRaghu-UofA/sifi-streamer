@@ -32,6 +32,20 @@ def background_main(
     *,
     log_level: int = logging.INFO,
 ) -> None:
+    """Run device acquisition, shared-memory publication, and capture recording.
+
+    This is the spawned worker entry point. It owns the device, shared-memory
+    blocks, ring buffers, acquisition thread, and recorder for their full
+    lifetimes, and reports startup success or failure through ``ack_queue``.
+
+    Args:
+        config: Shared-memory and recording settings.
+        device_factory: Factory invoked in this process to create the device.
+        cmd_queue: Commands from the foreground handle.
+        ack_queue: Startup and command acknowledgements to the foreground.
+        shm_prefix: Unique prefix for per-modality shared-memory names.
+        log_level: Worker root logging level.
+    """
     logging.basicConfig(level=log_level)
     _ignore_console_interrupts()
     try:
@@ -73,6 +87,7 @@ def background_main(
     recorder = RecorderFSM(config, device.device_info)
 
     def on_packet(packet: SiFiPacket) -> None:
+        """Publish known signal samples and forward the full packet to recording."""
         modality = packet.modality
         if modality is not None and packet.timestamps and packet.data:
             ring = rings.get(modality)

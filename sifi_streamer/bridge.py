@@ -27,6 +27,12 @@ EMG_SAMPLE_RATES = frozenset((500, 1000, 1600, 2000))
 
 
 class BridgeTransport(StrEnum):
+    """Supported bridge packet-output transports.
+
+    ``TCP`` connects to a bridge-hosted stream, ``UDP`` binds a local datagram
+    receiver, and ``STDOUT`` parses packet documents from the managed process.
+    """
+
     TCP = "tcp"
     UDP = "udp"
     STDOUT = "stdout"
@@ -37,6 +43,7 @@ class _UdpPacketReader:
         self._host, self._port, self._sock, self._pending = host, port, None, deque()
 
     def connect(self) -> None:
+        """Bind the configured UDP endpoint."""
         if self._sock is not None:
             return
         try:
@@ -49,6 +56,7 @@ class _UdpPacketReader:
             ) from exc
 
     def disconnect(self) -> None:
+        """Close the socket and discard queued packets."""
         if self._sock is not None:
             with contextlib.suppress(OSError):
                 self._sock.close()
@@ -56,6 +64,7 @@ class _UdpPacketReader:
         self._pending.clear()
 
     def read_packet(self) -> SiFiPacket:
+        """Return the next valid packet from one or more datagrams."""
         if self._sock is None:
             raise DeviceError("UDP packet reader.read_packet() called before connect()")
         while True:
@@ -75,13 +84,16 @@ class _StdoutPacketReader:
         self._packets, self._connected = packets, False
 
     def connect(self) -> None:
+        """Enable reads from the bridge stdout queue."""
         self._connected = True
 
     def disconnect(self) -> None:
+        """Disable reads and wake a blocked reader."""
         self._connected = False
         self._packets.put(None)
 
     def read_packet(self) -> SiFiPacket:
+        """Block for the next parsed stdout packet."""
         if not self._connected:
             raise DeviceError(
                 "stdout packet reader.read_packet() called before connect()"
@@ -92,7 +104,23 @@ class _StdoutPacketReader:
 
 
 class SiFiBridgeDevice:
-    """Launch, configure, stream from, and orderly stop one bridge process."""
+    """Launch, configure, stream from, and orderly stop one bridge process.
+
+    The executable must already be installed; device startup never downloads or
+    updates it. The process is placed in a separate Windows process group or
+    POSIX session so the foreground launcher retains Ctrl+C ownership.
+
+    Args:
+        host: TCP destination host or local UDP bind interface.
+        port: TCP or UDP packet port.
+        executable: Explicit path to the vendor bridge executable.
+        startup_timeout_s: Maximum wait for bridge info and TCP readiness.
+        transport: Packet transport name or :class:`BridgeTransport` member.
+        emg_sample_rate: Explicit supported EMG rate: 500, 1000, 1600, or 2000 Hz.
+
+    Raises:
+        ValueError: If ``transport`` or ``emg_sample_rate`` is unsupported.
+    """
 
     def __init__(
         self,
@@ -105,9 +133,7 @@ class SiFiBridgeDevice:
     ) -> None:
         if emg_sample_rate not in EMG_SAMPLE_RATES:
             choices = ", ".join(map(str, sorted(EMG_SAMPLE_RATES)))
-            raise ValueError(
-                f"emg_sample_rate must be one of: {choices}"
-            )
+            raise ValueError(f"emg_sample_rate must be one of: {choices}")
         (
             self._host,
             self._port,
@@ -133,15 +159,30 @@ class SiFiBridgeDevice:
 
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
+        """Return modality layouts reported by the connected bridge.
+
+        Raises:
+            DeviceError: If accessed before :meth:`connect` completes.
+        """
         if self._modalities is None:
             raise DeviceError("SiFiBridgeDevice.modalities accessed before connect()")
         return self._modalities
 
     @property
     def device_info(self) -> dict[str, object] | None:
+        """Return the complete bridge info document, if connection supplied one."""
         return self._device_info
 
     def connect(self) -> None:
+        """Launch and configure the bridge, then connect its packet reader.
+
+        Repeated calls after success are no-ops. Partial startup is cleaned up
+        before an error is propagated.
+
+        Raises:
+            DeviceError: If the executable is absent, the process or transport
+                fails, bridge metadata is invalid, or startup times out.
+        """
         if self._process is not None:
             return
         if not self._executable.exists():
@@ -175,6 +216,11 @@ class SiFiBridgeDevice:
             raise
 
     def disconnect(self) -> None:
+        """Orderly stop the reader and bridge, escalating to termination if needed.
+
+        Standard input, output, and error streams are closed during teardown.
+        Calling this method when disconnected is safe.
+        """
         reader, self._reader = self._reader, None
         if reader is not None:
             reader.disconnect()
@@ -202,6 +248,11 @@ class SiFiBridgeDevice:
                     stream.close()
 
     def read_packet(self) -> SiFiPacket:
+        """Return the next packet from the selected transport.
+
+        Raises:
+            DeviceError: If called before connection or packet I/O fails.
+        """
         if self._reader is None:
             raise DeviceError("SiFiBridgeDevice.read_packet() called before connect()")
         return self._reader.read_packet()

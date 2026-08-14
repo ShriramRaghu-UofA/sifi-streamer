@@ -13,7 +13,20 @@ from sifi_streamer.devices import DeviceFactory, SyntheticSiFiDevice
 
 
 class SiFiCaptureBackend:
-    """Own exactly one entered handle and its authoritative capture."""
+    """Adapt one background SiFi handle to the generic capture backend protocol.
+
+    The backend enters exactly one :class:`BackgroundHandle`, starts exactly one
+    authoritative capture on it, and releases partially acquired resources if
+    startup fails.
+
+    Args:
+        config: Worker, shared-memory, and recording settings.
+        device_factory: Picklable factory called inside the worker process.
+        capture_file: New authoritative capture path.
+        capture_id: Identifier for the capture occurrence.
+        attributes: Optional scalar capture metadata.
+        handle_factory: Injectable handle constructor for tests.
+    """
 
     def __init__(
         self,
@@ -36,6 +49,7 @@ class SiFiCaptureBackend:
         self._entered = self._capture_started = False
 
     def start(self) -> None:
+        """Enter the background handle and start recording; repeated calls are safe."""
         if self._entered:
             return
         self._handle.__enter__()
@@ -51,6 +65,7 @@ class SiFiCaptureBackend:
             raise
 
     def stop(self, reason: str = "normal_completion") -> None:
+        """Stop recording and always release the background handle."""
         try:
             if self._capture_started:
                 self._handle.stop_capture(reason)
@@ -61,12 +76,15 @@ class SiFiCaptureBackend:
                 self._entered = False
 
     def start_segment(self, segment_id: str, kind: str, attributes: Attributes) -> None:
+        """Forward a validated segment start to the background worker."""
         self._handle.start_segment(segment_id, kind, dict(attributes))
 
     def stop_segment(self, segment_id: str, reason: str) -> None:
+        """Forward a segment stop to the background worker."""
         self._handle.stop_segment(segment_id, reason)
 
     def marker(self, marker_id: str, kind: str, attributes: Attributes) -> None:
+        """Forward a validated marker in ``marker_id, kind`` order."""
         self._handle.add_marker(marker_id, kind, dict(attributes))
 
 
@@ -83,11 +101,32 @@ def create_sifi_capture(
     synthetic: bool = False,
     config: StreamerConfig | None = None,
 ) -> CaptureController:
+    """Compose a ready-to-start controller for real or synthetic SiFi capture.
+
+    No device, process, or output file is created until the returned controller
+    is started. The synthetic path needs no bridge executable.
+
+    Args:
+        capture_file: New authoritative capture path.
+        capture_id: Identifier for this capture occurrence.
+        attributes: Optional scalar capture metadata.
+        bridge_executable: Preinstalled vendor bridge path for hardware capture.
+        host: Bridge TCP destination or local UDP bind interface.
+        port: Bridge packet-output port.
+        transport: Bridge packet-output transport.
+        emg_sample_rate: Supported explicit EMG sample rate.
+        synthetic: Use generated signals instead of the vendor bridge.
+        config: Optional streamer settings; defaults to :class:`StreamerConfig`.
+
+    Returns:
+        A generic controller that owns the composed SiFi backend.
+
+    Raises:
+        ValueError: If ``emg_sample_rate`` is unsupported.
+    """
     if emg_sample_rate not in EMG_SAMPLE_RATES:
         choices = ", ".join(map(str, sorted(EMG_SAMPLE_RATES)))
-        raise ValueError(
-            f"emg_sample_rate must be one of: {choices}"
-        )
+        raise ValueError(f"emg_sample_rate must be one of: {choices}")
     factory: DeviceFactory = (
         partial(SyntheticSiFiDevice, emg_sample_rate=emg_sample_rate)
         if synthetic

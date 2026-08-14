@@ -22,6 +22,15 @@ from sifi_streamer.protocol import (
 
 
 class CommandHandler:
+    """Dispatch one foreground command at a time to a recorder.
+
+    Args:
+        cmd_queue: Incoming multiprocessing command queue.
+        ack_queue: Outgoing acknowledgement queue.
+        recorder: Worker-local authoritative recorder state machine.
+        poll_timeout_s: Maximum queue wait per :meth:`tick`.
+    """
+
     def __init__(
         self,
         cmd_queue: Queue,
@@ -38,6 +47,11 @@ class CommandHandler:
         )
 
     def tick(self) -> bool:
+        """Process at most one command and report whether shutdown was requested.
+
+        Recorder validation and I/O errors become :class:`ErrorAck` messages so
+        the foreground receives a specific failure rather than losing the worker.
+        """
         try:
             command: CommandMessage = self._cmd.get(timeout=self._poll)
         except queue.Empty:

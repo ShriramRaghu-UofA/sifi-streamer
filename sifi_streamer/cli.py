@@ -15,6 +15,7 @@ from sifi_streamer.sifi_backend import create_sifi_capture
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the standalone ``sifi-capture`` command-line parser."""
     parser = argparse.ArgumentParser(
         description="Write an authoritative SiFi capture log."
     )
@@ -44,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the standalone capture command and return zero on success.
+
+    The command refuses an existing output path, validates mode arguments before
+    starting hardware, and owns controller startup and shutdown through a runner.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.duration is not None and args.duration <= 0:
