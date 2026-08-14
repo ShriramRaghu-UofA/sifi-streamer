@@ -204,31 +204,44 @@ def decode_record(value: object) -> CaptureRecord:
     schema = _require_int(value["schema_version"], "schema_version")
     if schema != SCHEMA_VERSION:
         raise CaptureDecodeError(f"unsupported schema_version {schema}")
-    base = {
-        "schema_version": schema,
-        "sequence": _require_int(value["sequence"], "sequence"),
-        "host_monotonic_ns": _require_int(
-            value["host_monotonic_ns"], "host_monotonic_ns"
-        ),
-        "host_unix_ns": _require_int(value["host_unix_ns"], "host_unix_ns"),
-    }
+    sequence = _require_int(value["sequence"], "sequence")
+    host_monotonic_ns = _require_int(
+        value["host_monotonic_ns"], "host_monotonic_ns"
+    )
+    host_unix_ns = _require_int(value["host_unix_ns"], "host_unix_ns")
     record_type = _require_string(value["record_type"], "record_type")
     match record_type:
         case "raw_packet":
-            return RawPacket(**base, packet=_packet(value.get("packet")))
+            return RawPacket(
+                schema_version=schema,
+                sequence=sequence,
+                host_monotonic_ns=host_monotonic_ns,
+                host_unix_ns=host_unix_ns,
+                packet=_packet(value.get("packet")),
+            )
         case "capture_started":
             return CaptureStarted(
-                **base,
+                schema_version=schema,
+                sequence=sequence,
+                host_monotonic_ns=host_monotonic_ns,
+                host_unix_ns=host_unix_ns,
                 capture_id=_require_string(value.get("capture_id"), "capture_id"),
                 attributes=validate_attributes(value.get("attributes")),
             )
         case "capture_stopped":
             return CaptureStopped(
-                **base, reason=_require_string(value.get("reason"), "reason")
+                schema_version=schema,
+                sequence=sequence,
+                host_monotonic_ns=host_monotonic_ns,
+                host_unix_ns=host_unix_ns,
+                reason=_require_string(value.get("reason"), "reason"),
             )
         case "segment_started":
             return SegmentStarted(
-                **base,
+                schema_version=schema,
+                sequence=sequence,
+                host_monotonic_ns=host_monotonic_ns,
+                host_unix_ns=host_unix_ns,
                 segment_id=_require_string(value.get("segment_id"), "segment_id"),
                 segment_kind=_require_string(value.get("segment_kind"), "segment_kind"),
                 attributes=validate_attributes(value.get("attributes")),
@@ -238,7 +251,10 @@ def decode_record(value: object) -> CaptureRecord:
             if reason is not None and not isinstance(reason, str):
                 raise CaptureDecodeError("reason must be a string or null")
             return SegmentStopped(
-                **base,
+                schema_version=schema,
+                sequence=sequence,
+                host_monotonic_ns=host_monotonic_ns,
+                host_unix_ns=host_unix_ns,
                 segment_id=_require_string(value.get("segment_id"), "segment_id"),
                 reason=reason,
             )
@@ -250,7 +266,10 @@ def decode_record(value: object) -> CaptureRecord:
             if source_clock is not None and not isinstance(source_clock, str):
                 raise CaptureDecodeError("source_clock must be a string or null")
             return Marker(
-                **base,
+                schema_version=schema,
+                sequence=sequence,
+                host_monotonic_ns=host_monotonic_ns,
+                host_unix_ns=host_unix_ns,
                 marker_id=_require_string(value.get("marker_id"), "marker_id"),
                 marker_kind=_require_string(value.get("marker_kind"), "marker_kind"),
                 attributes=validate_attributes(value.get("attributes")),
@@ -292,24 +311,15 @@ class CaptureLogWriter:
         self._last_flush_ns, self._stopped, self._closed = monotonic_ns(), False, False
         self._append(
             CaptureStarted(
-                SCHEMA_VERSION,
-                0,
-                self._last_flush_ns,
-                unix_ns(),
-                _require_string(capture_id, "capture_id"),
-                values,
+                schema_version=SCHEMA_VERSION,
+                sequence=0,
+                host_monotonic_ns=self._last_flush_ns,
+                host_unix_ns=unix_ns(),
+                capture_id=_require_string(capture_id, "capture_id"),
+                attributes=values,
             ),
             boundary=True,
         )
-
-    def _record(self, cls: type[_Record], *args: object) -> _Record:
-        return cls(
-            SCHEMA_VERSION,
-            self._next_sequence,
-            self._monotonic_ns(),
-            self._unix_ns(),
-            *args,
-        )  # type: ignore[call-arg]
 
     def _append(self, record: CaptureRecord, *, boundary: bool = False) -> int:
         if self._closed or self._stopped:
@@ -326,7 +336,15 @@ class CaptureLogWriter:
         return record.sequence
 
     def append_packet(self, packet: Packet) -> int:
-        return self._append(self._record(RawPacket, _packet(packet)))
+        return self._append(
+            RawPacket(
+                schema_version=SCHEMA_VERSION,
+                sequence=self._next_sequence,
+                host_monotonic_ns=self._monotonic_ns(),
+                host_unix_ns=self._unix_ns(),
+                packet=_packet(packet),
+            )
+        )
 
     def start_segment(
         self, segment_id: str, segment_kind: str, attributes: Attributes | None = None
@@ -340,7 +358,15 @@ class CaptureLogWriter:
         values = validate_attributes(attributes or {})
         self._open_segments.add(segment_id)
         return self._append(
-            self._record(SegmentStarted, segment_id, segment_kind, values),
+            SegmentStarted(
+                schema_version=SCHEMA_VERSION,
+                sequence=self._next_sequence,
+                host_monotonic_ns=self._monotonic_ns(),
+                host_unix_ns=self._unix_ns(),
+                segment_id=segment_id,
+                segment_kind=segment_kind,
+                attributes=values,
+            ),
             boundary=True,
         )
 
@@ -349,7 +375,15 @@ class CaptureLogWriter:
             raise CaptureLifecycleError(f"segment {segment_id!r} is not open")
         self._open_segments.remove(segment_id)
         return self._append(
-            self._record(SegmentStopped, segment_id, reason), boundary=True
+            SegmentStopped(
+                schema_version=SCHEMA_VERSION,
+                sequence=self._next_sequence,
+                host_monotonic_ns=self._monotonic_ns(),
+                host_unix_ns=self._unix_ns(),
+                segment_id=segment_id,
+                reason=reason,
+            ),
+            boundary=True,
         )
 
     def append_marker(
@@ -368,13 +402,16 @@ class CaptureLogWriter:
         if source_time_ns is not None:
             _require_int(source_time_ns, "source_time_ns")
         return self._append(
-            self._record(
-                Marker,
-                marker_id,
-                marker_kind,
-                validate_attributes(attributes or {}),
-                source_time_ns,
-                source_clock,
+            Marker(
+                schema_version=SCHEMA_VERSION,
+                sequence=self._next_sequence,
+                host_monotonic_ns=self._monotonic_ns(),
+                host_unix_ns=self._unix_ns(),
+                marker_id=marker_id,
+                marker_kind=marker_kind,
+                attributes=validate_attributes(attributes or {}),
+                source_time_ns=source_time_ns,
+                source_clock=source_clock,
             )
         )
 
@@ -397,7 +434,13 @@ class CaptureLogWriter:
             )
         if not self._stopped:
             self._append(
-                self._record(CaptureStopped, _require_string(reason, "reason")),
+                CaptureStopped(
+                    schema_version=SCHEMA_VERSION,
+                    sequence=self._next_sequence,
+                    host_monotonic_ns=self._monotonic_ns(),
+                    host_unix_ns=self._unix_ns(),
+                    reason=_require_string(reason, "reason"),
+                ),
                 boundary=True,
             )
             self._stopped = True

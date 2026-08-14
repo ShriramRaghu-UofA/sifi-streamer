@@ -5,7 +5,9 @@ description = "Reusable SiFi acquisition, live streaming, and authoritative capt
 readme = "README.md"
 requires-python = ">=3.14"
 license = {text = "Proprietary"}
-dependencies = ["numpy>=2.4"]
+dependencies = [
+    "numpy==2.5.2",
+]
 
 [project.scripts]
 sifi-capture = "sifi_streamer.cli:main"
@@ -15,7 +17,10 @@ sifi-download-bridge = "sifi_streamer.bridge_download:main"
 parquet = ["pandas>=3", "pyarrow>=24"]
 
 [dependency-groups]
-dev = ["ruff>=0.16.1"]
+dev = [
+    "ruff>=0.16.1",
+    "ty>=0.0.71",
+]
 
 [build-system]
 requires = ["hatchling"]

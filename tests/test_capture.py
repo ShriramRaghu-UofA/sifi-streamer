@@ -9,14 +9,80 @@ from sifi_streamer.capture import (
     CaptureLifecycleError,
     CaptureLogReader,
     CaptureLogWriter,
+    CaptureStarted,
+    CaptureStopped,
     Marker,
     RawPacket,
+    SegmentStarted,
+    SegmentStopped,
     decode_record,
     encode_record,
 )
 
 
 class CaptureTests(unittest.TestCase):
+    def test_each_wire_record_decodes_to_its_concrete_type(self) -> None:
+        common = {
+            "schema_version": 2,
+            "sequence": 0,
+            "host_monotonic_ns": 1,
+            "host_unix_ns": 2,
+        }
+        cases = (
+            ({**common, "record_type": "raw_packet", "packet": {}}, RawPacket),
+            (
+                {
+                    **common,
+                    "record_type": "capture_started",
+                    "capture_id": "capture",
+                    "attributes": {},
+                },
+                CaptureStarted,
+            ),
+            (
+                {
+                    **common,
+                    "record_type": "capture_stopped",
+                    "reason": "completed",
+                },
+                CaptureStopped,
+            ),
+            (
+                {
+                    **common,
+                    "record_type": "segment_started",
+                    "segment_id": "segment",
+                    "segment_kind": "kind",
+                    "attributes": {},
+                },
+                SegmentStarted,
+            ),
+            (
+                {
+                    **common,
+                    "record_type": "segment_stopped",
+                    "segment_id": "segment",
+                    "reason": None,
+                },
+                SegmentStopped,
+            ),
+            (
+                {
+                    **common,
+                    "record_type": "marker",
+                    "marker_id": "marker",
+                    "marker_kind": "kind",
+                    "attributes": {},
+                    "source_time_ns": None,
+                    "source_clock": None,
+                },
+                Marker,
+            ),
+        )
+        for wire, expected_type in cases:
+            with self.subTest(record_type=wire["record_type"]):
+                self.assertIs(type(decode_record(wire)), expected_type)
+
     def test_round_trip_and_marker_order(self) -> None:
         marker = Marker(2, 4, 5, 6, "occurrence-1", "button", {"ok": True}, None, None)
         self.assertEqual(decode_record(json.loads(encode_record(marker))), marker)
