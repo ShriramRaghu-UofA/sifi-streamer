@@ -52,6 +52,11 @@ class RecorderFSM:
                 compression_level=self._config.capture_compression_level,
                 fsync_on_boundary=self._config.capture_fsync_on_boundary,
             )
+            if self._device_info is not None:
+                # The bridge info response is itself a complete raw device
+                # document. Preserve it in the authoritative stream before any
+                # acquired packets without changing the schema-v2 vocabulary.
+                self._writer.append_packet(self._device_info)
             logger.info(
                 "Opened authoritative capture %s (id=%r)", capture_file, capture_id
             )

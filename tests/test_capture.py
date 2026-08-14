@@ -4,6 +4,7 @@ import unittest
 from compression import zstd
 from pathlib import Path
 
+from sifi_streamer.background.recorder import RecorderFSM
 from sifi_streamer.capture import (
     CaptureDecodeError,
     CaptureLifecycleError,
@@ -19,9 +20,33 @@ from sifi_streamer.capture import (
     encode_record,
     validate_attributes,
 )
+from sifi_streamer.config import StreamerConfig
 
 
 class CaptureTests(unittest.TestCase):
+    def test_recorder_preserves_startup_device_info_as_first_raw_document(self) -> None:
+        device_info: dict[str, object] = {
+            "info": {
+                "id": "SB_3F4B",
+                "connected": True,
+                "device": {"firmware_version": "5.0", "emg": {"fs": 2000.0}},
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "capture.capture.jsonl.zst"
+            recorder = RecorderFSM(StreamerConfig(), device_info)
+            recorder.start_capture(path, "capture")
+            recorder.stop_capture()
+
+            records = list(CaptureLogReader(path))
+
+        self.assertIsInstance(records[0], CaptureStarted)
+        self.assertIsInstance(records[1], RawPacket)
+        startup_info = records[1]
+        assert isinstance(startup_info, RawPacket)
+        self.assertEqual(startup_info.packet, device_info)
+        self.assertIsInstance(records[2], CaptureStopped)
+
     def test_each_wire_record_decodes_to_its_concrete_type(self) -> None:
         common = {
             "schema_version": 2,

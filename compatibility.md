@@ -26,9 +26,10 @@ Segment records are authoritative, so the generic controller does not emit
 duplicate boundary markers.
 
 One source behavior stored bridge `device_info` as a string capture attribute.
-It was omitted because serialized state blobs violate the scalar-annotation
-contract. Complete device fields remain in raw packet documents, and live
-`BackgroundHandle.device_info` remains available for separate metadata.
+That encoding remains omitted because serialized state blobs violate the
+scalar-annotation contract. When available, the complete startup device-info
+document is instead written as the first schema-v2 `raw_packet`; live
+`BackgroundHandle.device_info` also remains available.
 
 Live acquisition now also accepts generic injected `AcquisitionDevice`
 implementations with fixed startup stream registries. Existing SiFi-facing

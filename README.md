@@ -187,7 +187,10 @@ same background and shared-memory path as hardware.
 
 The `.capture.jsonl.zst` file is authoritative, append-only schema-v2 JSONL in
 concatenated Zstandard frames. New files use exclusive creation and are never
-rewritten. Optional Parquet dependencies are available with
+rewritten. When supplied by the connected device, its complete startup-info
+document is preserved as the first raw packet after capture start; for SiFi
+hardware this includes the bridge-reported firmware, configuration, and sample
+rates. Optional Parquet dependencies are available with
 `sifi-streamer[parquet]`; conversion is not authoritative.
 
 See the [Python API reference](api.md), [architecture.md](architecture.md),

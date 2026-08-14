@@ -42,6 +42,12 @@ unknown fields while validating record version, sequence, capture lifecycle,
 segment lifecycle, JSON finiteness, and scalar annotations. A crashed,
 unterminated log remains readable; readers never mutate it.
 
+When a connected acquisition device supplies a startup information document,
+the recorder writes that complete document as the first `raw_packet` after
+`capture_started`. For SiFi hardware this preserves the bridge `info` response,
+including firmware, configuration, and reported sample rates, in the
+authoritative artifact without changing schema v2.
+
 ## Ownership rule
 
 > Only the launcher or component that starts a capture closes it. Code
