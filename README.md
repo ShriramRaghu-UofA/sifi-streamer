@@ -17,10 +17,12 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.2.1" }
+sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.2.2" }
 ```
 
-Use an immutable tag or commit in production.
+For this private repository, authenticate HTTPS access through Git's credential
+manager or a GitHub personal access token. Use an immutable tag or commit in
+production.
 
 ## Bridge download
 
