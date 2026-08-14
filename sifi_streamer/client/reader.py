@@ -1,5 +1,6 @@
 """Live shared-memory reader for one SiFi modality."""
 
+from dataclasses import dataclass
 from multiprocessing.shared_memory import SharedMemory
 from typing import Self
 
@@ -8,6 +9,18 @@ import numpy.typing as npt
 
 from sifi_streamer.background.ring_buffer import SeqlockRingBuffer
 from sifi_streamer.exceptions import StaleDataError
+
+
+@dataclass(frozen=True, slots=True)
+class SignalWindow:
+    """Copied, gap-aware rows from one live stream."""
+
+    start_index: int
+    end_index: int
+    timestamps: np.ndarray
+    samples: np.ndarray
+    validity: np.ndarray
+    overrun: bool = False
 
 
 class SharedMemoryReader:
@@ -111,6 +124,87 @@ class SharedMemoryReader:
                 else np.concatenate((ring[tail:], ring[:head]))
             )
         return None
+
+    def _coherent_snapshot(
+        self,
+    ) -> tuple[int, int, int, np.ndarray, np.ndarray, np.ndarray] | None:
+        for _ in range(16):
+            first = self._ring.read_counter()
+            if first % 2:
+                continue
+            head = self._ring.read_head()
+            total = self._ring.read_total()
+            samples = self._ring.copy_ring()
+            timestamps = self._ring.copy_timestamps()
+            validity = self._ring.copy_validity()
+            second = self._ring.read_counter()
+            if first == second:
+                return first, head, total, samples, timestamps, validity
+        return None
+
+    @staticmethod
+    def _ordered(array: np.ndarray, head: int, count: int) -> np.ndarray:
+        if count == 0:
+            return array[:0].copy()
+        tail = (head - count) % len(array)
+        return (
+            array[tail:head].copy()
+            if tail < head
+            else np.concatenate((array[tail:], array[:head]))
+        )
+
+    def read_signal_window(self, n_samples: int) -> SignalWindow | None:
+        """Return up to the newest ``n_samples`` rows with timestamps and validity."""
+        if n_samples <= 0 or n_samples > self.n_samples:
+            raise ValueError(f"n_samples must be between 1 and {self.n_samples}")
+        snapshot = self._coherent_snapshot()
+        if snapshot is None:
+            return None
+        counter, head, total, samples, timestamps, validity = snapshot
+        if total == 0 or counter == self._last_counter:
+            return None
+        count = min(n_samples, total, self.n_samples)
+        self._last_counter = counter
+        return SignalWindow(
+            total - count,
+            total,
+            self._ordered(timestamps, head, count),
+            self._ordered(samples, head, count),
+            self._ordered(validity, head, count),
+        )
+
+    def read_since(
+        self, cursor: int, *, max_samples: int | None = None
+    ) -> SignalWindow | None:
+        """Return rows newer than an absolute cursor, reporting ring overruns."""
+        if cursor < 0:
+            raise ValueError("cursor must be non-negative")
+        if max_samples is not None and max_samples <= 0:
+            raise ValueError("max_samples must be positive")
+        snapshot = self._coherent_snapshot()
+        if snapshot is None:
+            return None
+        counter, head, total, samples, timestamps, validity = snapshot
+        if cursor >= total:
+            return None
+        retained = min(total, self.n_samples)
+        oldest = total - retained
+        start = max(cursor, oldest)
+        if max_samples is not None:
+            start = max(start, total - max_samples)
+        ordered_samples = self._ordered(samples, head, retained)
+        ordered_timestamps = self._ordered(timestamps, head, retained)
+        ordered_validity = self._ordered(validity, head, retained)
+        offset = start - oldest
+        self._last_counter = counter
+        return SignalWindow(
+            start,
+            total,
+            ordered_timestamps[offset:],
+            ordered_samples[offset:],
+            ordered_validity[offset:],
+            cursor < oldest,
+        )
 
     def close(self) -> None:
         """Release local NumPy views and close this shared-memory attachment."""

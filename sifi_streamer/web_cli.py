@@ -1,0 +1,113 @@
+"""Command-line launcher for the local capture dashboard."""
+
+import argparse
+import json
+from collections.abc import Sequence
+from pathlib import Path
+
+from sifi_streamer.annotation_kinds import AnnotationKindDefinition
+from sifi_streamer.bridge import EMG_SAMPLE_RATES, BridgeTransport
+from sifi_streamer.health import HealthThresholds
+from sifi_streamer.runner import parse_attributes
+from sifi_streamer.sifi_backend import create_sifi_capture_runtime
+from sifi_streamer.web import _kind, serve_capture_web
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Serve a local monitored SiFi capture dashboard."
+    )
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--capture-id", default="capture")
+    parser.add_argument("--attribute", action="append", default=[], metavar="KEY=VALUE")
+    parser.add_argument("--kinds-file", type=Path)
+    parser.add_argument(
+        "--bridge-executable", type=Path, default=Path("bin/sifibridge.exe")
+    )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument(
+        "--transport", choices=tuple(BridgeTransport), default=BridgeTransport.TCP
+    )
+    parser.add_argument(
+        "--emg-sample-rate", type=int, choices=sorted(EMG_SAMPLE_RATES), default=1600
+    )
+    parser.add_argument("--synthetic", action="store_true")
+    parser.add_argument("--health-window", type=float, default=5.0)
+    parser.add_argument("--stale-after", type=float, default=2.0)
+    parser.add_argument("--minimum-rate-ratio", type=float, default=0.9)
+    parser.add_argument("--maximum-rate-ratio", type=float, default=1.1)
+    parser.add_argument("--maximum-missing-fraction", type=float, default=0.0)
+    parser.add_argument("--maximum-lost-samples", type=int, default=0)
+    parser.add_argument("--no-health-log", action="store_true")
+    parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--web-port", type=int, default=0)
+    return parser
+
+
+def _definitions(path: Path | None) -> tuple[AnnotationKindDefinition, ...]:
+    if path is None:
+        return ()
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError("kinds file must contain a JSON array of objects")
+    return tuple(_kind(item) for item in value)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.output.exists():
+        parser.error(f"output already exists: {args.output}")
+    try:
+        thresholds = HealthThresholds(
+            args.health_window,
+            args.stale_after,
+            args.minimum_rate_ratio,
+            args.maximum_rate_ratio,
+            args.maximum_missing_fraction,
+            args.maximum_lost_samples,
+        )
+        definitions = _definitions(args.kinds_file)
+        attributes = parse_attributes(args.attribute)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        parser.error(str(exc))
+
+    def factory(capture_id: str, capture_attributes):
+        return create_sifi_capture_runtime(
+            args.output,
+            capture_id,
+            capture_attributes,
+            bridge_executable=args.bridge_executable,
+            host=args.host,
+            port=args.port,
+            transport=args.transport,
+            emg_sample_rate=args.emg_sample_rate,
+            synthetic=args.synthetic,
+            thresholds=thresholds,
+        )
+
+    serve_capture_web(
+        args.output,
+        factory,
+        configuration_summary={
+            "device": "synthetic" if args.synthetic else "SiFi bridge",
+            "bridge_executable": str(args.bridge_executable),
+            "host": args.host,
+            "port": args.port,
+            "transport": str(args.transport),
+            "emg_sample_rate": args.emg_sample_rate,
+        },
+        default_capture_id=args.capture_id,
+        default_attributes=attributes,
+        thresholds=thresholds,
+        definitions=definitions,
+        health_log_enabled=not args.no_health_log,
+        port=args.web_port,
+        open_browser=not args.no_open,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

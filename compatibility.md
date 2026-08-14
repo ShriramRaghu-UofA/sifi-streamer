@@ -29,3 +29,13 @@ One source behavior stored bridge `device_info` as a string capture attribute.
 It was omitted because serialized state blobs violate the scalar-annotation
 contract. Complete device fields remain in raw packet documents, and live
 `BackgroundHandle.device_info` remains available for separate metadata.
+
+Live acquisition now also accepts generic injected `AcquisitionDevice`
+implementations with fixed startup stream registries. Existing SiFi-facing
+`Modality`, `Modalities`, `ModalitySpec`, `SiFiPacket`, `BackgroundHandle.reader`,
+`readers`, and `modalities` remain available. New integrations should use
+`SignalStreamSpec`, `streams`, and `stream_readers`. Shared memory is a runtime
+boundary rather than a persisted wire format.
+
+Health sidecars and web annotation-kind definitions do not add records to or
+change the meaning of schema-v2 captures.

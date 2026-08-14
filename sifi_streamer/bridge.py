@@ -18,8 +18,10 @@ from sifi_streamer.devices import (
     PacketReader,
     SiFiBandDevice,
     SiFiPacket,
+    SignalStreamSpec,
     modalities_from_device_info,
     packet_from_json_line,
+    streams_from_modalities,
 )
 from sifi_streamer.exceptions import DeviceError
 
@@ -167,6 +169,11 @@ class SiFiBridgeDevice:
         if self._modalities is None:
             raise DeviceError("SiFiBridgeDevice.modalities accessed before connect()")
         return self._modalities
+
+    @property
+    def streams(self) -> tuple[SignalStreamSpec, ...]:
+        """Return the connected bridge's generic signal stream registry."""
+        return streams_from_modalities(self.modalities)
 
     @property
     def device_info(self) -> dict[str, object] | None:

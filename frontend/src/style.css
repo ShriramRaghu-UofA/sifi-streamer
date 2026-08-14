@@ -1,0 +1,32 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: business --default;
+}
+
+@layer base {
+  body {
+    @apply min-h-screen bg-base-300 text-base-content;
+  }
+
+  code {
+    @apply text-info;
+    overflow-wrap: anywhere;
+  }
+}
+
+.plot,
+.uplot {
+  width: 100%;
+  min-height: 220px;
+}
+
+.uplot,
+.uplot .u-title,
+.uplot .u-legend {
+  color: var(--color-base-content);
+  font-family: inherit;
+}
+
+.uplot .u-legend .u-series > * {
+  font-size: 0.72rem;
+}

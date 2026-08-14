@@ -1,0 +1,22 @@
+{
+  "name": "sifi-capture-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@sveltejs/vite-plugin-svelte": "latest",
+    "svelte": "latest",
+    "uplot": "^1.6.32",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "daisyui": "^5.7.17",
+    "svelte-check": "latest",
+    "tailwindcss": "^4.3.3",
+    "typescript": "latest"
+  }
+}

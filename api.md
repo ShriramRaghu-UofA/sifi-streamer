@@ -127,6 +127,22 @@ cleanup of partially entered handles.
 
 ## Live acquisition
 
+### Generic injected devices
+
+`AcquisitionDevice` is the generic structural boundary. After `connect()`, its
+ordered `streams` tuple is fixed for the capture. Each `SignalStreamSpec` has a
+string ID, `SignalChannelSpec` entries, a positive nominal rate, a native NumPy
+dtype, and optional display labels and units.
+
+`AcquisitionPacket` contributes timestamps and channel data to zero or one
+declared stream. `capture_document()` independently returns the complete raw
+packet to record, or `None` for an adapter-only contribution. This permits an
+adapter to split a multi-stream message without duplicating its raw record.
+
+`create_capture_runtime(path, capture_id, device_factory, ...)` composes an
+injected device with a controller and `AcquisitionMonitor`.
+`create_sifi_capture_runtime(...)` is the SiFi convenience equivalent.
+
 ### Modalities and packets
 
 `Modality` identifies EMG, IMU, ECG, EDA, PPG, and temperature packet streams.
@@ -194,6 +210,28 @@ newest coherent `(time, channels)` NumPy copy in chronological order. It returns
 for unchanged data when requested. `n_samples`, `n_channels`, `dtype`, and
 `has_new_data` describe the attached ring. `close()` releases only the local
 attachment; the worker owns unlinking.
+
+`read_signal_window(n_samples)` and `read_since(cursor, *, max_samples=None)`
+return `SignalWindow(start_index, end_index, timestamps, samples, validity,
+overrun)`. Validity is independent of payload dtype, so integer and floating
+streams represent missing values identically. `BackgroundHandle.streams` and
+`stream_readers` expose arbitrary injected streams; existing modality
+properties remain SiFi compatibility views.
+
+### Health and web capture
+
+`HealthThresholds` controls rolling rate, staleness, missingness, and loss
+warnings. `AcquisitionMonitor.latest()` returns immutable evaluated snapshots;
+`events` retains warning/recovery transitions, `fatal()` reports reliable
+worker failure, and `read_since()` supplies live signal batches.
+
+`AnnotationKindDefinition` provides separate marker or segment shortcuts with
+display metadata, ID prefix/separator/padding/start, and default scalar
+attributes. `AnnotationKindRegistry` generates collision-free IDs in Python.
+
+`serve_capture_web(output, runtime_factory, ...)` owns one controller behind a
+loopback-only dashboard. Downstream launchers retain dependency injection by
+supplying the runtime factory and a read-only scalar configuration summary.
 
 ## Runners and interactive input
 

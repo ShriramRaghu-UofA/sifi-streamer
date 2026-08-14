@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sifi_streamer.capture import Attributes
-from sifi_streamer.devices import Modalities
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +115,28 @@ class ModalityInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class StreamInfo:
+    """Shared-memory and display metadata for one generic live stream."""
+
+    stream_id: str
+    shm_name: str
+    n_samples: int
+    channels: tuple[str, ...]
+    nominal_rate_hz: float
+    payload_dtype: str = "<f4"
+    label: str | None = None
+    channel_labels: tuple[str | None, ...] = ()
+    channel_units: tuple[str | None, ...] = ()
+
+    @property
+    def n_channels(self) -> int:
+        return len(self.channels)
+
+    def samples_for_seconds(self, seconds: float) -> int:
+        return max(round(seconds * self.nominal_rate_hz), 1)
+
+
+@dataclass(frozen=True, slots=True)
 class Ready:
     """Report successful worker startup and available live streams.
 
@@ -124,7 +145,7 @@ class Ready:
         device_info: Optional vendor metadata reported during device connection.
     """
 
-    modalities: Modalities[ModalityInfo]
+    streams: tuple[StreamInfo, ...]
     device_info: dict[str, object] | None = None
 
 

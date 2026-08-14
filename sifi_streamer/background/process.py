@@ -1,10 +1,15 @@
 """Background acquisition process entry point."""
 
+import contextlib
 import logging
+import math
+import queue
 import signal
 import threading
+import time
 from multiprocessing import Queue
 from multiprocessing.shared_memory import SharedMemory
+from typing import cast
 
 import numpy as np
 
@@ -13,9 +18,16 @@ from sifi_streamer.background.command_handler import CommandHandler
 from sifi_streamer.background.recorder import RecorderFSM
 from sifi_streamer.background.ring_buffer import SeqlockRingBuffer
 from sifi_streamer.config import StreamerConfig
-from sifi_streamer.devices import DeviceFactory, Modalities, SiFiPacket
+from sifi_streamer.devices import (
+    AcquisitionPacket,
+    DeviceFactory,
+    SiFiDevice,
+    SignalStreamSpec,
+    streams_from_modalities,
+)
 from sifi_streamer.exceptions import DeviceError
-from sifi_streamer.protocol import ErrorAck, ModalityInfo, Ready
+from sifi_streamer.health import WorkerFatal, WorkerHealthCollector
+from sifi_streamer.protocol import ErrorAck, Ready, StreamInfo
 
 
 def _ignore_console_interrupts() -> None:
@@ -31,6 +43,8 @@ def background_main(
     shm_prefix: str,
     *,
     log_level: int = logging.INFO,
+    health_queue: Queue | None = None,
+    fatal_queue: Queue | None = None,
 ) -> None:
     """Run device acquisition, shared-memory publication, and capture recording.
 
@@ -51,17 +65,24 @@ def background_main(
     try:
         device = device_factory()
         device.connect()
-        modalities = device.modalities
+        streams_value = getattr(device, "streams", None)
+        streams: tuple[SignalStreamSpec, ...] = (
+            tuple(streams_value)
+            if streams_value is not None
+            else streams_from_modalities(cast(SiFiDevice, device).modalities)
+        )
+        if not streams or len({item.stream_id for item in streams}) != len(streams):
+            raise ValueError("device streams must be non-empty and uniquely identified")
     except (DeviceError, OSError, RuntimeError, TypeError, ValueError) as exc:
         ack_queue.put(ErrorAck(str(exc)))
         return
-    rings: Modalities[SeqlockRingBuffer] = Modalities()
-    shms: Modalities[SharedMemory] = Modalities()
+    rings: dict[str, SeqlockRingBuffer] = {}
+    shms: dict[str, SharedMemory] = {}
     try:
-        for modality, spec in modalities.enabled():
-            count = max(round(config.ring_buffer_seconds * spec.sample_rate), 16)
+        for index, spec in enumerate(streams):
+            count = max(round(config.ring_buffer_seconds * spec.nominal_rate_hz), 16)
             shm = SharedMemory(
-                name=f"{shm_prefix}_{modality.value}",
+                name=f"{shm_prefix}_{index}",
                 create=True,
                 size=SeqlockRingBuffer.required_bytes(
                     count, spec.n_channels, dtype=spec.numpy_dtype
@@ -70,14 +91,12 @@ def background_main(
             ring = SeqlockRingBuffer(
                 count, spec.n_channels, shm, dtype=spec.numpy_dtype, is_owner=True
             )
-            shms, rings = (
-                shms.with_value(modality, shm),
-                rings.with_value(modality, ring),
-            )
+            shms[spec.stream_id] = shm
+            rings[spec.stream_id] = ring
     except (OSError, ValueError) as exc:
         ack_queue.put(ErrorAck(str(exc)))
         device.disconnect()
-        for _, shm in shms.enabled():
+        for shm in shms.values():
             try:
                 shm.close()
                 shm.unlink()
@@ -85,56 +104,128 @@ def background_main(
                 pass
         return
     recorder = RecorderFSM(config, device.device_info)
+    specs = {item.stream_id: item for item in streams}
+    health = WorkerHealthCollector(
+        tuple(
+            (item.stream_id, item.nominal_rate_hz, item.n_channels) for item in streams
+        )
+    )
 
-    def on_packet(packet: SiFiPacket) -> None:
+    def on_packet(packet: AcquisitionPacket) -> None:
         """Publish known signal samples and forward the full packet to recording."""
-        modality = packet.modality
-        if modality is not None and packet.timestamps and packet.data:
-            ring = rings.get(modality)
-            if ring is not None:
-                spec, length = modalities.require(modality), len(packet.timestamps)
-                matrix = np.zeros((length, spec.n_channels), dtype=spec.numpy_dtype)
-                for index, channel in enumerate(spec.channels):
-                    values = packet.data.get(channel)
-                    if values:
-                        matrix[: min(length, len(values)), index] = values[:length]
-                ring.write_samples(matrix)
+        stream_id = packet.stream_id
+        if stream_id is not None and stream_id in rings:
+            spec = specs[stream_id]
+            rows: list[tuple[int, float]] = []
+            for index, value in enumerate(packet.timestamps):
+                try:
+                    timestamp = float(value)
+                except TypeError, ValueError:
+                    continue
+                if math.isfinite(timestamp):
+                    rows.append((index, timestamp))
+            matrix = np.zeros((len(rows), spec.n_channels), dtype=spec.numpy_dtype)
+            validity = np.zeros((len(rows), spec.n_channels), dtype=np.bool_)
+            misaligned = (
+                not packet.timestamps
+                or not packet.data
+                or len(rows) != len(packet.timestamps)
+            )
+            for channel_index, channel in enumerate(spec.channels):
+                values = packet.data.get(channel.channel_id)
+                if values is None or isinstance(values, str | bytes):
+                    misaligned = True
+                    continue
+                if len(values) != len(packet.timestamps):
+                    misaligned = True
+                for row_index, (source_index, _timestamp) in enumerate(rows):
+                    if source_index >= len(values):
+                        continue
+                    value = values[source_index]
+                    if value is None:
+                        continue
+                    try:
+                        numeric = float(value)
+                        if not math.isfinite(numeric):
+                            continue
+                        matrix[row_index, channel_index] = value
+                    except TypeError, ValueError, OverflowError:
+                        continue
+                    validity[row_index, channel_index] = True
+            timestamps = np.asarray([item[1] for item in rows], dtype=np.float64)
+            if rows:
+                rings[stream_id].write_samples(
+                    matrix, timestamps=timestamps, validity=validity
+                )
+            health.observe(
+                stream_id,
+                timestamps=timestamps.tolist(),
+                validity=validity.tolist(),
+                reported_rate_hz=getattr(packet, "reported_rate_hz", None),
+                samples_lost=getattr(packet, "samples_lost", 0),
+                status=getattr(packet, "status", "ok"),
+                misaligned=misaligned,
+            )
         recorder.on_packet(packet)
 
     stop_event = threading.Event()
-    acquisition = AcquisitionThread(device, on_packet, stop_event)
+    acquisition = AcquisitionThread(
+        device, on_packet, stop_event, already_connected=True
+    )
     handler = CommandHandler(cmd_queue, ack_queue, recorder)
     acquisition.start()
     ack_queue.put(
         Ready(
-            Modalities.from_enabled(
-                (
-                    modality,
-                    ModalityInfo(
-                        ring.shm_name,
-                        ring.n_samples,
-                        ring.n_channels,
-                        modalities.require(modality).channels,
-                        modalities.require(modality).sample_rate,
-                        ring.dtype.str,
-                    ),
+            tuple(
+                StreamInfo(
+                    spec.stream_id,
+                    rings[spec.stream_id].shm_name,
+                    rings[spec.stream_id].n_samples,
+                    tuple(channel.channel_id for channel in spec.channels),
+                    spec.nominal_rate_hz,
+                    rings[spec.stream_id].dtype.str,
+                    spec.label,
+                    tuple(channel.label for channel in spec.channels),
+                    tuple(channel.unit for channel in spec.channels),
                 )
-                for modality, ring in rings.enabled()
+                for spec in streams
             ),
             device.device_info,
         )
     )
     try:
+        last_health = 0.0
+        fatal_sent = False
         while not handler.tick():
-            pass
+            now = time.monotonic()
+            if health_queue is not None and now - last_health >= 0.25:
+                snapshot = health.snapshot(acquisition_alive=acquisition.is_alive())
+                try:
+                    health_queue.put_nowait(snapshot)
+                except queue.Full:
+                    with contextlib.suppress(queue.Empty):
+                        health_queue.get_nowait()
+                    with contextlib.suppress(queue.Full):
+                        health_queue.put_nowait(snapshot)
+                last_health = now
+            if (
+                not acquisition.is_alive()
+                and acquisition.failure is not None
+                and not fatal_sent
+            ):
+                if fatal_queue is not None:
+                    fatal_queue.put(
+                        WorkerFatal("acquisition_failure", str(acquisition.failure))
+                    )
+                fatal_sent = True
     finally:
         stop_event.set()
         device.disconnect()
         acquisition.join(timeout=5)
         recorder.close()
-        for modality, ring in rings.enabled():
+        for stream_id, ring in rings.items():
             ring.close()
-            shm = shms.require(modality)
+            shm = shms[stream_id]
             try:
                 shm.close()
                 shm.unlink()

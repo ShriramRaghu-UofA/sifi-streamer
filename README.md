@@ -19,7 +19,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.2.2" }
+sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.3.0" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential
@@ -125,6 +125,7 @@ sifi-capture recording.capture.jsonl.zst --capture-id session-001 `
   --bridge-executable C:\tools\sifibridge.exe --emg-sample-rate 1600
 sifi-capture timed.capture.jsonl.zst --capture-id baseline --duration 300
 sifi-capture notes.capture.jsonl.zst --capture-id annotated --interactive
+sifi-capture-web monitored.capture.jsonl.zst --capture-id session-001
 ```
 
 Interactive commands:
@@ -140,6 +141,26 @@ stop
 Ctrl+C becomes `operator_interrupt`; the worker and bridge are stopped
 orderly so the capture is flushed.
 
+## Local capture dashboard
+
+`sifi-capture-web` starts a loopback-only Python server, prints its URL, and
+opens the default browser unless `--no-open` is supplied. The launcher fixes
+the output and device configuration; the page confirms them, starts/stops one
+capture, displays all declared streams, shows advertised/reported/observed
+rates and missing-data warnings, and provides marker/segment controls.
+
+Marker and segment kinds have independent generated IDs. A segment kind named
+`Task` uses `Task_01`, `Task_02`, and so on by default. Pass `--kinds-file` to
+load reusable definitions; operators may adjust them for the current capture.
+Health thresholds remain editable while recording. A non-authoritative
+`.health.jsonl` sidecar is enabled by default and can be disabled.
+
+The dashboard requires its per-launch URL token and bundles Svelte, daisyUI,
+and uPlot assets in the wheel for offline use. Installing from a wheel or Git
+does not require Node.js because the compiled dashboard assets are committed
+under `sifi_streamer/web_assets`. Node.js is needed only to change and rebuild
+the frontend.
+
 ## Synthetic capture
 
 ```powershell
@@ -147,8 +168,11 @@ sifi-capture synthetic.capture.jsonl.zst --capture-id dev --synthetic --duration
 ```
 
 For live access, enter a `BackgroundHandle` and read `handle.reader` (EMG) or
-the typed `handle.readers` collection. `SyntheticSiFiDevice` uses the same
-background and shared-memory path as hardware.
+the typed `handle.readers` compatibility collection. Generic injected devices
+declare fixed `SignalStreamSpec` values and use `handle.streams` and
+`handle.stream_readers`. Gap-aware incremental reads return source timestamps,
+native values, and an explicit validity mask. `SyntheticSiFiDevice` uses the
+same background and shared-memory path as hardware.
 
 The `.capture.jsonl.zst` file is authoritative, append-only schema-v2 JSONL in
 concatenated Zstandard frames. New files use exclusive creation and are never
@@ -156,4 +180,5 @@ rewritten. Optional Parquet dependencies are available with
 `sifi-streamer[parquet]`; conversion is not authoritative.
 
 See the [Python API reference](api.md), [architecture.md](architecture.md),
-[migration.md](migration.md), and [compatibility.md](compatibility.md).
+[migration.md](migration.md), [compatibility.md](compatibility.md), and
+[contribution guide](CONTRIBUTING.md).

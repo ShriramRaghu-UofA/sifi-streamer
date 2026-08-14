@@ -40,11 +40,13 @@ CaptureController -> CaptureBackend protocol -> SiFiCaptureBackend
   does not inherit from `CaptureController`.
 - The capture log, annotations, controller, and runners should remain
   device-neutral where practical.
-- Do not prematurely generalize live acquisition to arbitrary devices.
-  `Modality`, `Modalities`, `SiFiPacket`, `SiFiDevice`, bridge transports, and
-  shared-memory organization intentionally remain SiFi-specific.
-- Do not add a meta-package or dynamic stream registry without a concrete new
-  device requirement and an explicitly approved design change.
+- Live acquisition accepts injected `AcquisitionDevice` implementations with a
+  fixed startup registry of string-keyed `SignalStreamSpec` values. Each packet
+  contributes to at most one declared stream. Do not support streams appearing
+  or disappearing after startup without another explicitly approved change.
+- Preserve `Modality`, `Modalities`, `SiFiPacket`, `SiFiDevice`, and bridge
+  transports as SiFi-specific compatibility conveniences over the generic
+  acquisition boundary. Do not add a meta-package or unrelated device registry.
 
 ## Generic capture vocabulary
 
@@ -237,10 +239,21 @@ Before handoff, run:
 
 ```powershell
 uv run python -m unittest discover -s tests -v
-.\.venv\Scripts\ruff.exe check sifi_streamer tests
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check
+Push-Location frontend
+npm ci
+npm run check
+npm run build
+Pop-Location
 git diff --check
 uv build
 ```
+
+Frontend changes must include the regenerated, committed files under
+`sifi_streamer/web_assets`. Do not commit `frontend/node_modules`. A Git or
+wheel installation consumes the compiled assets and must not require Node.js.
 
 Also install the built wheel into a clean temporary Python 3.14 environment and
 confirm:

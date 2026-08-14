@@ -45,3 +45,9 @@ sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag =
 
 Pin both consumers to the same immutable tag or commit, regenerate `uv.lock`,
 and verify a short synthetic capture before hardware testing.
+
+Consumers with non-SiFi acquisition devices may inject an `AcquisitionDevice`
+with fixed `SignalStreamSpec` declarations. Prefer dynamic `streams` and
+`stream_readers`; fixed `Modalities` remains a SiFi compatibility view. Web
+consumer launchers pass a runtime factory to `serve_capture_web` rather than
+moving lifecycle ownership into browser code.

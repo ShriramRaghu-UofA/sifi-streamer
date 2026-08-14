@@ -10,10 +10,12 @@ from sifi_streamer.client.handle import BackgroundHandle
 from sifi_streamer.config import StreamerConfig
 from sifi_streamer.controller import CaptureController
 from sifi_streamer.devices import DeviceFactory, SyntheticSiFiDevice
+from sifi_streamer.health import HealthThresholds
+from sifi_streamer.monitor import AcquisitionMonitor, CaptureRuntime
 
 
-class SiFiCaptureBackend:
-    """Adapt one background SiFi handle to the generic capture backend protocol.
+class AcquisitionCaptureBackend:
+    """Adapt one background acquisition handle to the capture backend protocol.
 
     The backend enters exactly one :class:`BackgroundHandle`, starts exactly one
     authoritative capture on it, and releases partially acquired resources if
@@ -47,6 +49,11 @@ class SiFiCaptureBackend:
             validate_attributes(attributes or {}),
         )
         self._entered = self._capture_started = False
+
+    @property
+    def handle(self) -> BackgroundHandle:
+        """Return the owned handle for composition with a read-only monitor."""
+        return self._handle
 
     def start(self) -> None:
         """Enter the background handle and start recording; repeated calls are safe."""
@@ -86,6 +93,9 @@ class SiFiCaptureBackend:
     def marker(self, marker_id: str, kind: str, attributes: Attributes) -> None:
         """Forward a validated marker in ``marker_id, kind`` order."""
         self._handle.add_marker(marker_id, kind, dict(attributes))
+
+
+SiFiCaptureBackend = AcquisitionCaptureBackend
 
 
 def create_sifi_capture(
@@ -143,4 +153,66 @@ def create_sifi_capture(
         SiFiCaptureBackend(
             config or StreamerConfig(), factory, capture_file, capture_id, attributes
         )
+    )
+
+
+def create_capture_runtime(
+    capture_file: Path,
+    capture_id: str,
+    device_factory: DeviceFactory,
+    attributes: Mapping[str, Scalar] | None = None,
+    *,
+    config: StreamerConfig | None = None,
+    thresholds: HealthThresholds | None = None,
+) -> CaptureRuntime:
+    """Compose a generic injected device with a controller and live monitor."""
+    backend = AcquisitionCaptureBackend(
+        config or StreamerConfig(),
+        device_factory,
+        capture_file,
+        capture_id,
+        attributes,
+    )
+    return CaptureRuntime(
+        CaptureController(backend), AcquisitionMonitor(backend.handle, thresholds)
+    )
+
+
+def create_sifi_capture_runtime(
+    capture_file: Path,
+    capture_id: str,
+    attributes: Mapping[str, Scalar] | None = None,
+    *,
+    bridge_executable: str | Path = "bin/sifibridge.exe",
+    host: str = "127.0.0.1",
+    port: int = 5000,
+    transport: BridgeTransport | str = BridgeTransport.TCP,
+    emg_sample_rate: int = 1600,
+    synthetic: bool = False,
+    config: StreamerConfig | None = None,
+    thresholds: HealthThresholds | None = None,
+) -> CaptureRuntime:
+    """Compose the standard SiFi device with controller and monitor access."""
+    if emg_sample_rate not in EMG_SAMPLE_RATES:
+        choices = ", ".join(map(str, sorted(EMG_SAMPLE_RATES)))
+        raise ValueError(f"emg_sample_rate must be one of: {choices}")
+    factory: DeviceFactory = (
+        partial(SyntheticSiFiDevice, emg_sample_rate=emg_sample_rate)
+        if synthetic
+        else partial(
+            SiFiBridgeDevice,
+            host=host,
+            port=port,
+            executable=bridge_executable,
+            transport=transport,
+            emg_sample_rate=emg_sample_rate,
+        )
+    )
+    return create_capture_runtime(
+        capture_file,
+        capture_id,
+        factory,
+        attributes,
+        config=config,
+        thresholds=thresholds,
     )

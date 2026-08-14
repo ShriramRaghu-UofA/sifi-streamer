@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sifi_streamer.capture import Attributes, CaptureLogWriter
 from sifi_streamer.config import StreamerConfig
-from sifi_streamer.devices import SiFiPacket
+from sifi_streamer.devices import AcquisitionPacket
 
 
 class RecorderFSM:
@@ -99,11 +99,14 @@ class RecorderFSM:
                 source_clock=source_clock,
             )
 
-    def on_packet(self, packet: SiFiPacket) -> None:
+    def on_packet(self, packet: AcquisitionPacket) -> None:
         """Append a complete packet document when capture is active."""
         with self._lock:
-            if self._writer is not None:
-                self._writer.append_packet(packet.capture_document())
+            if (
+                self._writer is not None
+                and (document := packet.capture_document()) is not None
+            ):
+                self._writer.append_packet(document)
 
     def close(self) -> None:
         """Close an active writer for ``operator_request``; otherwise do nothing."""

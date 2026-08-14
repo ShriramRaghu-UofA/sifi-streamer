@@ -6,6 +6,11 @@ installation. Most consumers should import from this module and construct a
 controller with :func:`create_sifi_capture`.
 """
 
+from sifi_streamer.annotation_kinds import (
+    AnnotationKindDefinition,
+    AnnotationKindRegistry,
+    AnnotationTarget,
+)
 from sifi_streamer.bridge import EMG_SAMPLE_RATES, BridgeTransport, SiFiBridgeDevice
 from sifi_streamer.bridge_download import (
     TESTED_VERSION,
@@ -36,7 +41,7 @@ from sifi_streamer.capture import (
     validate_attributes,
 )
 from sifi_streamer.client.handle import BackgroundHandle
-from sifi_streamer.client.reader import SharedMemoryReader
+from sifi_streamer.client.reader import SharedMemoryReader, SignalWindow
 from sifi_streamer.config import StreamerConfig
 from sifi_streamer.controller import (
     CaptureBackend,
@@ -46,6 +51,8 @@ from sifi_streamer.controller import (
 from sifi_streamer.devices import (
     DEFAULT_MODALITIES,
     SIGNAL_MODALITIES,
+    AcquisitionDevice,
+    AcquisitionPacket,
     DeviceFactory,
     Modalities,
     Modality,
@@ -54,9 +61,12 @@ from sifi_streamer.devices import (
     SiFiBandDevice,
     SiFiDevice,
     SiFiPacket,
+    SignalChannelSpec,
+    SignalStreamSpec,
     SyntheticSiFiDevice,
     modalities_from_device_info,
     packet_from_json_line,
+    streams_from_modalities,
 )
 from sifi_streamer.exceptions import (
     AckError,
@@ -67,6 +77,15 @@ from sifi_streamer.exceptions import (
     StaleDataError,
     StreamerError,
 )
+from sifi_streamer.health import (
+    HealthEvent,
+    HealthSeverity,
+    HealthSnapshot,
+    HealthThresholds,
+    StreamHealth,
+)
+from sifi_streamer.health_log import HealthLogWriter, default_health_path
+from sifi_streamer.monitor import AcquisitionMonitor, CaptureRuntime
 from sifi_streamer.protocol import (
     AckMessage,
     AddMarker,
@@ -80,6 +99,7 @@ from sifi_streamer.protocol import (
     StartSegment,
     StopCapture,
     StopSegment,
+    StreamInfo,
 )
 from sifi_streamer.runner import (
     interactive_annotations,
@@ -90,7 +110,14 @@ from sifi_streamer.runner import (
     run_timed_capture,
     run_until_interrupt,
 )
-from sifi_streamer.sifi_backend import SiFiCaptureBackend, create_sifi_capture
+from sifi_streamer.sifi_backend import (
+    AcquisitionCaptureBackend,
+    SiFiCaptureBackend,
+    create_capture_runtime,
+    create_sifi_capture,
+    create_sifi_capture_runtime,
+)
+from sifi_streamer.web import WebCaptureCoordinator, serve_capture_web
 
 __all__ = [
     "DEFAULT_MODALITIES",
@@ -100,7 +127,14 @@ __all__ = [
     "AckError",
     "AckMessage",
     "AckTimeoutError",
+    "AcquisitionCaptureBackend",
+    "AcquisitionDevice",
+    "AcquisitionMonitor",
+    "AcquisitionPacket",
     "AddMarker",
+    "AnnotationKindDefinition",
+    "AnnotationKindRegistry",
+    "AnnotationTarget",
     "Attributes",
     "BackgroundHandle",
     "BridgeAsset",
@@ -116,12 +150,18 @@ __all__ = [
     "CaptureLogReader",
     "CaptureLogWriter",
     "CaptureRecord",
+    "CaptureRuntime",
     "CaptureStarted",
     "CaptureStopped",
     "CommandMessage",
     "DeviceError",
     "DeviceFactory",
     "ErrorAck",
+    "HealthEvent",
+    "HealthLogWriter",
+    "HealthSeverity",
+    "HealthSnapshot",
+    "HealthThresholds",
     "Marker",
     "MarkerAdded",
     "Modalities",
@@ -143,16 +183,25 @@ __all__ = [
     "SiFiCaptureBackend",
     "SiFiDevice",
     "SiFiPacket",
+    "SignalChannelSpec",
+    "SignalStreamSpec",
+    "SignalWindow",
     "StaleDataError",
     "StartCapture",
     "StartSegment",
     "StopCapture",
     "StopSegment",
+    "StreamHealth",
+    "StreamInfo",
     "StreamerConfig",
     "StreamerError",
     "SyntheticSiFiDevice",
+    "WebCaptureCoordinator",
+    "create_capture_runtime",
     "create_sifi_capture",
+    "create_sifi_capture_runtime",
     "decode_record",
+    "default_health_path",
     "encode_record",
     "install_bridge",
     "interactive_annotations",
@@ -165,6 +214,8 @@ __all__ = [
     "run_interactive_capture",
     "run_timed_capture",
     "run_until_interrupt",
+    "serve_capture_web",
+    "streams_from_modalities",
     "tagged_asset",
     "validate_attributes",
 ]

@@ -3,13 +3,13 @@
 ```text
 consumer functions
        |
-CaptureController -> CaptureBackend protocol -> SiFiCaptureBackend
+CaptureController -> CaptureBackend protocol -> AcquisitionCaptureBackend
                                                 |
                                          BackgroundHandle
                                                 |
                     acquisition + shared memory + CaptureLogWriter
                                                 |
-                                  SiFiDevice / SiFiBridgeDevice
+                           AcquisitionDevice / SiFiBridgeDevice
 ```
 
 `CaptureController` knows only captures, segments, markers, IDs, kinds,
@@ -24,10 +24,16 @@ one entered `BackgroundHandle`; it is not a controller subclass. The handle
 owns the spawned worker and shared-memory readers. The worker owns the device,
 ring buffers, and recorder. The recorder serializes packets and annotations.
 
-SiFi live acquisition remains fixed-shape: `Modality`, `Modalities`,
-`SiFiPacket`, `SiFiDevice`, bridge transports, and per-modality shared-memory
-rings. A dynamic multi-device registry is deferred until a real second device
-requires it.
+Live acquisition uses an ordered registry of string stream IDs declared once
+after an injected device connects. Each `SignalStreamSpec` fixes its channels,
+nominal rate, dtype, and optional display metadata. Each packet contributes to
+at most one stream and may independently provide one raw capture document.
+Shared-memory rings retain timestamps, native values, explicit validity, and
+an absolute cursor.
+
+`Modality`, `Modalities`, `SiFiPacket`, and `SiFiDevice` remain supported SiFi
+compatibility projections. Stream addition or removal after startup remains
+out of scope because live layouts are fixed for a capture.
 
 The authoritative artifact is an append-only `*.capture.jsonl.zst`.
 `CaptureLogWriter` exclusively creates schema-v2 JSONL in concatenated
@@ -44,6 +50,16 @@ unterminated log remains readable; readers never mutate it.
 
 Launchers should use `runner.py`; application functions should receive a
 started controller and manage only their own segments.
+
+The local web launcher's Python coordinator owns one controller. Browser tabs
+send commands and display immutable state; closing a tab does not stop capture.
+
+## Observability
+
+The worker publishes cumulative health separately from command acknowledgements.
+A lossy latest-value queue feeds rate and missingness display, while a reliable
+fatal queue reports acquisition or recorder failure. Warnings do not alter
+authoritative data. Optional `*.health.jsonl` files are non-authoritative.
 
 ## Vendor bridge installation
 

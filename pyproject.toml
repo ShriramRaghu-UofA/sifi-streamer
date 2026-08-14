@@ -1,6 +1,6 @@
 [project]
 name = "sifi-streamer"
-version = "0.2.2"
+version = "0.3.0"
 description = "Reusable SiFi acquisition, live streaming, and authoritative capture logging"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 sifi-capture = "sifi_streamer.cli:main"
+sifi-capture-web = "sifi_streamer.web_cli:main"
 sifi-download-bridge = "sifi_streamer.bridge_download:main"
 
 [project.optional-dependencies]
@@ -28,6 +29,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sifi_streamer"]
+
+[tool.hatch.build]
+exclude = ["frontend/node_modules"]
 
 [tool.ruff]
 target-version = "py314"

@@ -12,8 +12,9 @@ from sifi_streamer.background.process import background_main
 from sifi_streamer.capture import Attributes
 from sifi_streamer.client.reader import SharedMemoryReader
 from sifi_streamer.config import StreamerConfig
-from sifi_streamer.devices import DeviceFactory, Modalities
+from sifi_streamer.devices import DeviceFactory, Modalities, Modality
 from sifi_streamer.exceptions import AckError, AckTimeoutError, RecordingError
+from sifi_streamer.health import RawHealthSnapshot, WorkerFatal
 from sifi_streamer.protocol import (
     AddMarker,
     CaptureStarted,
@@ -29,6 +30,7 @@ from sifi_streamer.protocol import (
     StartSegment,
     StopCapture,
     StopSegment,
+    StreamInfo,
 )
 
 
@@ -57,6 +59,8 @@ class BackgroundHandle:
         context = multiprocessing.get_context("spawn")
         self._cmd_queue: Queue = context.Queue()
         self._ack_queue: Queue = context.Queue()
+        self._health_queue: Queue = context.Queue(maxsize=1)
+        self._fatal_queue: Queue = context.Queue()
         self._process = context.Process(
             target=background_main,
             kwargs={
@@ -64,6 +68,8 @@ class BackgroundHandle:
                 "device_factory": device_factory,
                 "cmd_queue": self._cmd_queue,
                 "ack_queue": self._ack_queue,
+                "health_queue": self._health_queue,
+                "fatal_queue": self._fatal_queue,
                 "shm_prefix": f"sifi_{uuid.uuid4().hex[:12]}",
                 "log_level": background_log_level,
             },
@@ -72,6 +78,8 @@ class BackgroundHandle:
         )
         self._readers: Modalities[SharedMemoryReader] = Modalities()
         self._modalities: Modalities[ModalityInfo] = Modalities()
+        self._stream_readers: dict[str, SharedMemoryReader] = {}
+        self._streams: tuple[StreamInfo, ...] = ()
         self._device_info: dict[str, object] | None = None
         self._entered = False
 
@@ -90,15 +98,29 @@ class BackgroundHandle:
         self._process.start()
         ack = self._wait_ack(timeout=30)
         if isinstance(ack, Ready):
-            self._modalities, self._device_info = ack.modalities, ack.device_info
-            for modality, info in ack.modalities.enabled():
-                self._readers = self._readers.with_value(
+            self._streams, self._device_info = ack.streams, ack.device_info
+            for info in ack.streams:
+                reader = SharedMemoryReader(
+                    info.shm_name,
+                    info.n_samples,
+                    info.n_channels,
+                    dtype=info.payload_dtype,
+                )
+                self._stream_readers[info.stream_id] = reader
+                try:
+                    modality = Modality(info.stream_id)
+                except ValueError:
+                    continue
+                self._readers = self._readers.with_value(modality, reader)
+                self._modalities = self._modalities.with_value(
                     modality,
-                    SharedMemoryReader(
+                    ModalityInfo(
                         info.shm_name,
                         info.n_samples,
                         info.n_channels,
-                        dtype=info.payload_dtype,
+                        info.channels,
+                        round(info.nominal_rate_hz),
+                        info.payload_dtype,
                     ),
                 )
             self._entered = True
@@ -120,11 +142,20 @@ class BackgroundHandle:
             if self._process.is_alive():
                 self._process.terminate()
                 self._process.join(timeout=2)
-            for _modality, reader in self._readers.enabled():
+            for reader in self._stream_readers.values():
                 reader.close()
-            self._readers, self._modalities, self._device_info, self._entered = (
+            (
+                self._readers,
+                self._modalities,
+                self._stream_readers,
+                self._streams,
+                self._device_info,
+                self._entered,
+            ) = (
                 Modalities(),
                 Modalities(),
+                {},
+                (),
                 None,
                 False,
             )
@@ -157,6 +188,38 @@ class BackgroundHandle:
                 "modalities are available only inside the context manager"
             )
         return self._modalities
+
+    @property
+    def streams(self) -> tuple[StreamInfo, ...]:
+        """Return every declared generic stream while entered."""
+        if not self._entered:
+            raise RuntimeError("streams are available only inside the context manager")
+        return self._streams
+
+    @property
+    def stream_readers(self) -> dict[str, SharedMemoryReader]:
+        """Return a copy of the dynamic stream-to-reader mapping."""
+        if not self._entered:
+            raise RuntimeError(
+                "stream_readers are available only inside the context manager"
+            )
+        return dict(self._stream_readers)
+
+    def poll_health(self) -> RawHealthSnapshot | None:
+        """Return the newest available cumulative health snapshot without blocking."""
+        latest = None
+        while True:
+            try:
+                latest = self._health_queue.get_nowait()
+            except queue.Empty:
+                return latest
+
+    def poll_fatal(self) -> WorkerFatal | None:
+        """Return one reliable worker fatal event without blocking."""
+        try:
+            return self._fatal_queue.get_nowait()
+        except queue.Empty:
+            return None
 
     @property
     def device_info(self) -> dict[str, object] | None:
