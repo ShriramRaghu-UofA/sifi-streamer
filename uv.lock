@@ -148,7 +148,7 @@ wheels = [
 
 [[package]]
 name = "sifi-streamer"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -168,7 +168,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "numpy", specifier = "==2.5.2" },
+    { name = "numpy", specifier = ">=2.5" },
     { name = "pandas", marker = "extra == 'parquet'", specifier = ">=3" },
     { name = "pyarrow", marker = "extra == 'parquet'", specifier = ">=24" },
 ]

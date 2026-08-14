@@ -17,6 +17,7 @@ from sifi_streamer.capture import (
     SegmentStopped,
     decode_record,
     encode_record,
+    validate_attributes,
 )
 
 
@@ -144,16 +145,19 @@ class CaptureTests(unittest.TestCase):
                 )
             )
             records = list(CaptureLogReader(path))
-            self.assertEqual(records[1].marker_id, "id")
+            marker = records[1]
+            assert isinstance(marker, Marker)
+            self.assertEqual(marker.marker_id, "id")
             self.assertEqual(path.read_bytes(), path.read_bytes())
 
     def test_invalid_attributes_rejected_at_write_and_decode_boundaries(self) -> None:
         for invalid in (
             {"nested": {"x": 1}},
             {"list": [1]},
-            {"nan": float("nan")},
-            {"infinite": float("inf")},
         ):
+            with self.subTest(invalid=invalid), self.assertRaises(CaptureDecodeError):
+                validate_attributes(invalid)
+        for invalid in ({"nan": float("nan")}, {"infinite": float("inf")}):
             with (
                 self.subTest(invalid=invalid),
                 tempfile.TemporaryDirectory() as directory,

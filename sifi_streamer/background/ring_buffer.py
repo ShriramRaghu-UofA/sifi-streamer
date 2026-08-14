@@ -1,6 +1,8 @@
 """Seqlock-guarded NumPy ring buffer backed by shared memory."""
 
+from collections.abc import Buffer
 from multiprocessing.shared_memory import SharedMemory
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -34,10 +36,11 @@ class SeqlockRingBuffer:
             payload_dtype,
             shm,
         )
-        self._counter = np.frombuffer(shm.buf, dtype=np.uint64, count=1)
-        self._head = np.frombuffer(shm.buf, dtype=np.uint32, count=1, offset=8)
+        buffer = cast(Buffer, shm.buf)
+        self._counter = np.frombuffer(buffer, dtype=np.uint64, count=1)
+        self._head = np.frombuffer(buffer, dtype=np.uint32, count=1, offset=8)
         self._ring = np.frombuffer(
-            shm.buf,
+            buffer,
             dtype=payload_dtype,
             count=n_samples * n_channels,
             offset=_HEADER_BYTES,

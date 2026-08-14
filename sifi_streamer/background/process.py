@@ -74,15 +74,16 @@ def background_main(
 
     def on_packet(packet: SiFiPacket) -> None:
         modality = packet.modality
-        ring = rings.get(modality) if modality is not None else None
-        if ring is not None and packet.timestamps and packet.data:
-            spec, length = modalities.require(modality), len(packet.timestamps)
-            matrix = np.zeros((length, spec.n_channels), dtype=spec.numpy_dtype)
-            for index, channel in enumerate(spec.channels):
-                values = packet.data.get(channel)
-                if values:
-                    matrix[: min(length, len(values)), index] = values[:length]
-            ring.write_samples(matrix)
+        if modality is not None and packet.timestamps and packet.data:
+            ring = rings.get(modality)
+            if ring is not None:
+                spec, length = modalities.require(modality), len(packet.timestamps)
+                matrix = np.zeros((length, spec.n_channels), dtype=spec.numpy_dtype)
+                for index, channel in enumerate(spec.channels):
+                    values = packet.data.get(channel)
+                    if values:
+                        matrix[: min(length, len(values)), index] = values[:length]
+                ring.write_samples(matrix)
         recorder.on_packet(packet)
 
     stop_event = threading.Event()

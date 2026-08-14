@@ -17,7 +17,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.1.0" }
+sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.2.0" }
 ```
 
 Use an immutable tag or commit in production.

@@ -187,6 +187,11 @@ class PacketReader(Protocol):
 type DeviceFactory = Callable[[], SiFiDevice]
 
 
+class _BinaryLineReader(Protocol):
+    def readline(self) -> bytes: ...
+    def close(self) -> None: ...
+
+
 def packet_from_json_line(line: str | bytes) -> SiFiPacket | None:
     try:
         raw = json.loads(line)
@@ -208,7 +213,9 @@ def packet_from_json_line(line: str | bytes) -> SiFiPacket | None:
 
 class SiFiBandDevice:
     def __init__(self, host: str = "127.0.0.1", port: int = 5000) -> None:
-        self._host, self._port, self._sock, self._file = host, port, None, None
+        self._host, self._port = host, port
+        self._sock: socket.socket | None = None
+        self._file: _BinaryLineReader | None = None
 
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
@@ -234,7 +241,8 @@ class SiFiBandDevice:
             if resource is not None:
                 with contextlib.suppress(OSError):
                     resource.close()
-        self._file = self._sock = None
+        self._file = None
+        self._sock = None
 
     def read_packet(self) -> SiFiPacket:
         if self._file is None:

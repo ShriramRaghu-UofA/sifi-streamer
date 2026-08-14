@@ -4,7 +4,7 @@ import logging
 import multiprocessing
 import queue
 import uuid
-from multiprocessing import Process, Queue
+from multiprocessing import Queue
 from pathlib import Path
 from typing import Self
 
@@ -44,7 +44,7 @@ class BackgroundHandle:
         context = multiprocessing.get_context("spawn")
         self._cmd_queue: Queue = context.Queue()
         self._ack_queue: Queue = context.Queue()
-        self._process: Process = context.Process(
+        self._process = context.Process(
             target=background_main,
             kwargs={
                 "config": config,
@@ -97,7 +97,7 @@ class BackgroundHandle:
             if self._process.is_alive():
                 self._process.terminate()
                 self._process.join(timeout=2)
-            for _, reader in self._readers.enabled():
+            for _modality, reader in self._readers.enabled():
                 reader.close()
             self._readers, self._modalities, self._device_info, self._entered = (
                 Modalities(),

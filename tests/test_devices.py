@@ -61,10 +61,15 @@ class DeviceTests(unittest.TestCase):
                 }
             }
         )
-        self.assertEqual(modalities.emg.sample_rate, 2000)
-        self.assertEqual(modalities.ppg.sample_rate, 100)
+        emg = modalities.emg
+        ppg = modalities.ppg
+        assert emg is not None
+        assert ppg is not None
+        self.assertEqual(emg.sample_rate, 2000)
+        self.assertEqual(ppg.sample_rate, 100)
         self.assertIsNone(modalities.imu)
         packet = packet_from_json_line(PACKET)
+        assert packet is not None
         self.assertEqual(packet.document, json.loads(PACKET))
         self.assertIs(packet.modality, Modality.ECG)
 
@@ -72,6 +77,9 @@ class DeviceTests(unittest.TestCase):
         class Resetting:
             def readline(self) -> bytes:
                 raise ConnectionResetError("reset")
+
+            def close(self) -> None:
+                pass
 
         device = SiFiBandDevice()
         device._file = Resetting()
@@ -83,7 +91,10 @@ class DeviceTests(unittest.TestCase):
         reader.connect()
         sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            sender.sendto(PACKET.encode(), ("127.0.0.1", reader._sock.getsockname()[1]))
+            reader_socket = reader._sock
+            assert reader_socket is not None
+            address = "127.0.0.1", reader_socket.getsockname()[1]
+            sender.sendto(PACKET.encode(), address)
             self.assertEqual(reader.read_packet().packet_type, "ecg")
         finally:
             sender.close()
@@ -139,6 +150,7 @@ class DeviceTests(unittest.TestCase):
                 handle.start_capture(path, "synthetic")
                 time.sleep(0.03)
                 window = handle.reader.read_window(4)
+                assert window is not None
                 self.assertEqual(window.shape, (4, 8))
                 handle.stop_capture()
             self.assertTrue(

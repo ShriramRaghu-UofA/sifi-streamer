@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import TracebackType
 from unittest.mock import patch
 
 from sifi_streamer.bridge_download import (
@@ -55,7 +56,12 @@ class BridgeDownloadTests(unittest.TestCase):
             def __enter__(self):
                 return self
 
-            def __exit__(self, *_: object) -> None:
+            def __exit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc_val: BaseException | None,
+                exc_tb: TracebackType | None,
+            ) -> None:
                 self.close()
 
         with tempfile.TemporaryDirectory() as directory:
@@ -114,9 +120,21 @@ class BridgeDownloadTests(unittest.TestCase):
         self.assertEqual(asset.sha256, "a" * 64)
         self.assertEqual(asset.source, "latest")
 
-        release["assets"][0]["digest"] = None
+        release_without_digest = {
+            "tag_name": "2.1.0",
+            "assets": [
+                {
+                    "name": "sifibridge-2.1.0-x86_64-pc-windows-msvc.zip",
+                    "browser_download_url": "https://example.test/bridge.zip",
+                    "digest": None,
+                }
+            ],
+        }
         with (
-            patch("sifi_streamer.bridge_download._read_json", return_value=release),
+            patch(
+                "sifi_streamer.bridge_download._read_json",
+                return_value=release_without_digest,
+            ),
             self.assertRaisesRegex(BridgeDownloadError, "no valid SHA-256"),
         ):
             latest_asset(suffix="x86_64-pc-windows-msvc.zip")
