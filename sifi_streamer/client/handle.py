@@ -33,6 +33,8 @@ from sifi_streamer.protocol import (
     StreamInfo,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class BackgroundHandle:
     """Own one spawned acquisition worker and its live shared-memory readers.
@@ -96,6 +98,7 @@ class BackgroundHandle:
         if self._entered:
             return self
         self._process.start()
+        logger.info("Started acquisition worker process (pid=%s)", self._process.pid)
         ack = self._wait_ack(timeout=30)
         if isinstance(ack, Ready):
             self._streams, self._device_info = ack.streams, ack.device_info
@@ -124,9 +127,11 @@ class BackgroundHandle:
                     ),
                 )
             self._entered = True
+            logger.info("Acquisition worker ready with %d stream(s)", len(ack.streams))
             return self
         self._process.terminate()
         self._process.join()
+        logger.error("Acquisition worker failed before becoming ready")
         if isinstance(ack, ErrorAck):
             raise AckError(f"Background process failed during startup: {ack.message}")
         raise AckTimeoutError("Background process did not send Ready within 30s")
@@ -140,6 +145,9 @@ class BackgroundHandle:
             self._process.join(timeout=5)
         finally:
             if self._process.is_alive():
+                logger.warning(
+                    "Acquisition worker did not stop in time; terminating it"
+                )
                 self._process.terminate()
                 self._process.join(timeout=2)
             for reader in self._stream_readers.values():
@@ -159,6 +167,7 @@ class BackgroundHandle:
                 None,
                 False,
             )
+            logger.info("Acquisition worker and shared-memory readers closed")
 
     @property
     def reader(self) -> SharedMemoryReader:

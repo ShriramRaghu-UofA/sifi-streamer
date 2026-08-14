@@ -1,5 +1,6 @@
 """Composition adapter from generic capture to SiFi acquisition."""
 
+import logging
 from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
@@ -12,6 +13,8 @@ from sifi_streamer.controller import CaptureController
 from sifi_streamer.devices import DeviceFactory, SyntheticSiFiDevice
 from sifi_streamer.health import HealthThresholds
 from sifi_streamer.monitor import AcquisitionMonitor, CaptureRuntime
+
+logger = logging.getLogger(__name__)
 
 
 class AcquisitionCaptureBackend:
@@ -66,7 +69,9 @@ class AcquisitionCaptureBackend:
                 self._capture_file, self._capture_id, self._attributes
             )
             self._capture_started = True
+            logger.info("Authoritative capture started at %s", self._capture_file)
         except Exception:
+            logger.exception("Could not start capture at %s", self._capture_file)
             self._handle.__exit__(None, None, None)
             self._entered = False
             raise
@@ -77,6 +82,7 @@ class AcquisitionCaptureBackend:
             if self._capture_started:
                 self._handle.stop_capture(reason)
                 self._capture_started = False
+                logger.info("Authoritative capture stopped with reason %r", reason)
         finally:
             if self._entered:
                 self._handle.__exit__(None, None, None)

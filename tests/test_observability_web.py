@@ -147,10 +147,15 @@ class ObservabilityTests(unittest.TestCase):
                 ),
             )
             coordinator.start("web", {"operator": "test"})
-            segment = coordinator.start_segment("Task", {})
-            self.assertEqual(segment, "Task_01")
-            coordinator.marker("Note", {"value": 1})
-            coordinator.stop_segment(segment)
+            with self.assertLogs("sifi_streamer.web", level="INFO") as messages:
+                segment = coordinator.start_segment("Task", {})
+                self.assertEqual(segment, "Task_01")
+                coordinator.marker("Note", {"value": 1})
+                coordinator.stop_segment(segment)
+            output_messages = "\n".join(messages.output)
+            self.assertIn("Started segment 'Task_01'", output_messages)
+            self.assertIn("Added marker 'Note_01'", output_messages)
+            self.assertIn("Stopped segment 'Task_01'", output_messages)
             time.sleep(0.02)
             live = coordinator.live({})
             batches = live["batches"]

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -55,6 +56,10 @@ def _definitions(path: Path | None) -> tuple[AnnotationKindDefinition, ...]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.output.exists():

@@ -1,11 +1,14 @@
 """Thread-safe serialization point for the authoritative capture."""
 
+import logging
 import threading
 from pathlib import Path
 
 from sifi_streamer.capture import Attributes, CaptureLogWriter
 from sifi_streamer.config import StreamerConfig
 from sifi_streamer.devices import AcquisitionPacket
+
+logger = logging.getLogger(__name__)
 
 
 class RecorderFSM:
@@ -49,6 +52,9 @@ class RecorderFSM:
                 compression_level=self._config.capture_compression_level,
                 fsync_on_boundary=self._config.capture_fsync_on_boundary,
             )
+            logger.info(
+                "Opened authoritative capture %s (id=%r)", capture_file, capture_id
+            )
 
     def stop_capture(self, reason: str = "normal_completion") -> None:
         """Close and discard the active writer.
@@ -61,6 +67,7 @@ class RecorderFSM:
                 raise RuntimeError("capture is not active")
             self._writer.close(reason)
             self._writer = None
+            logger.info("Closed authoritative capture with reason %r", reason)
 
     def start_segment(
         self, segment_id: str, kind: str, attributes: Attributes | None = None
@@ -70,6 +77,7 @@ class RecorderFSM:
             if self._writer is None:
                 raise RuntimeError("capture is not active")
             self._writer.start_segment(segment_id, kind, attributes)
+            logger.info("Wrote segment start %r (kind %r)", segment_id, kind)
 
     def stop_segment(self, segment_id: str, reason: str | None = None) -> None:
         """Write a segment stop to the active capture."""
@@ -77,6 +85,7 @@ class RecorderFSM:
             if self._writer is None:
                 raise RuntimeError("capture is not active")
             self._writer.stop_segment(segment_id, reason)
+            logger.info("Wrote segment stop %r (reason %r)", segment_id, reason)
 
     def marker(
         self,
@@ -98,6 +107,7 @@ class RecorderFSM:
                 source_time_ns=source_time_ns,
                 source_clock=source_clock,
             )
+            logger.info("Wrote marker %r (kind %r)", marker_id, kind)
 
     def on_packet(self, packet: AcquisitionPacket) -> None:
         """Append a complete packet document when capture is active."""
@@ -114,3 +124,4 @@ class RecorderFSM:
             if self._writer is not None:
                 self._writer.close("operator_request")
                 self._writer = None
+                logger.warning("Closed active capture during worker teardown")

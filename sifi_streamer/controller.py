@@ -5,11 +5,14 @@ Applications compose :class:`CaptureController` with a structural
 ordering; the backend owns acquisition and persistence resources.
 """
 
+import logging
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
 from sifi_streamer.capture import Attributes, Scalar, validate_attributes
 from sifi_streamer.exceptions import CaptureInitializationError
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -94,9 +97,11 @@ class CaptureController:
         try:
             self._backend.start()
         except Exception as exc:
+            logger.exception("Capture backend startup failed")
             self._stop_backend("startup_failure")
             raise CaptureInitializationError("capture backend failed to start") from exc
         self.started = True
+        logger.info("Capture controller started")
 
     def _require_started(self) -> None:
         if not self.started:
@@ -120,6 +125,7 @@ class CaptureController:
         """
         self._require_started()
         self._backend.marker(marker_id, kind, _values(attributes, extra))
+        logger.info("Recorded marker %r (kind %r)", marker_id, kind)
 
     def start_segment(
         self,
@@ -140,6 +146,7 @@ class CaptureController:
             raise RuntimeError(f"segment {segment_id!r} is already active")
         self._backend.start_segment(segment_id, kind, _values(attributes, extra))
         self._segments.append(segment_id)
+        logger.info("Started segment %r (kind %r)", segment_id, kind)
         return segment_id
 
     def stop_segment(self, segment_id: str, reason: str = "completed") -> None:
@@ -154,12 +161,14 @@ class CaptureController:
             raise RuntimeError("segments must be stopped in reverse start order")
         self._backend.stop_segment(segment_id, reason)
         self._segments.pop()
+        logger.info("Stopped segment %r with reason %r", segment_id, reason)
 
     def _stop_backend(self, reason: str) -> None:
         if self._backend_stopped:
             return
         self._backend_stopped = True
         self._backend.stop(reason)
+        logger.info("Stopped capture backend with reason %r", reason)
 
     def close(self, reason: str = "normal_completion") -> None:
         """Close open segments and stop the backend exactly once.

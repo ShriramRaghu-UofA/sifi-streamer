@@ -149,11 +149,22 @@ the output and device configuration; the page confirms them, starts/stops one
 capture, displays all declared streams, shows advertised/reported/observed
 rates and missing-data warnings, and provides marker/segment controls.
 
+Capture and annotation metadata are JSON objects containing simple scalar
+values: text, numbers, booleans, or `null`. They attach searchable facts such as
+an operator, condition, or session number to a record; nested objects and lists
+are rejected. The dashboard explains each field, validates malformed JSON
+before sending it, and shows visible success or error feedback for commands.
+Dracula is the default theme, with persistent Nord and light alternatives.
+
 Marker and segment kinds have independent generated IDs. A segment kind named
 `Task` uses `Task_01`, `Task_02`, and so on by default. Pass `--kinds-file` to
 load reusable definitions; operators may adjust them for the current capture.
 Health thresholds remain editable while recording. A non-authoritative
 `.health.jsonl` sidecar is enabled by default and can be disabled.
+
+Both capture CLIs configure console logging. The foreground, worker, bridge,
+recorder, annotations, shutdown, and health warning/recovery transitions are
+reported without logging raw packets or routine dashboard polling.
 
 The dashboard requires its per-launch URL token and bundles Svelte, daisyUI,
 and uPlot assets in the wheel for offline use. Installing from a wheel or Git

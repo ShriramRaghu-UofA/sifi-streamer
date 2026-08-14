@@ -1,6 +1,7 @@
 """Device polling thread."""
 
 import contextlib
+import logging
 import threading
 from collections.abc import Callable
 
@@ -10,6 +11,8 @@ from sifi_streamer.devices import (
     SiFiDevice,
 )
 from sifi_streamer.exceptions import DeviceError
+
+logger = logging.getLogger(__name__)
 
 
 class AcquisitionThread(threading.Thread):
@@ -42,11 +45,14 @@ class AcquisitionThread(threading.Thread):
         try:
             if not self._already_connected:
                 self._device.connect()
+            logger.info("Acquisition thread started")
             while not self._stop.is_set():
                 self._on_packet(self._device.read_packet())
         except (DeviceError, OSError, RuntimeError, TypeError, ValueError) as exc:
             if not self._stop.is_set():
                 self.failure = exc
+                logger.exception("Acquisition thread stopped unexpectedly")
         finally:
             with contextlib.suppress(DeviceError, OSError):
                 self._device.disconnect()
+            logger.info("Acquisition thread stopped")

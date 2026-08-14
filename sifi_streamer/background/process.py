@@ -29,6 +29,8 @@ from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.health import WorkerFatal, WorkerHealthCollector
 from sifi_streamer.protocol import ErrorAck, Ready, StreamInfo
 
+logger = logging.getLogger(__name__)
+
 
 def _ignore_console_interrupts() -> None:
     """Leave console Ctrl+C ownership with the foreground launcher."""
@@ -60,8 +62,12 @@ def background_main(
         shm_prefix: Unique prefix for per-modality shared-memory names.
         log_level: Worker root logging level.
     """
-    logging.basicConfig(level=log_level)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     _ignore_console_interrupts()
+    logger.info("Acquisition worker starting")
     try:
         device = device_factory()
         device.connect()
@@ -73,7 +79,12 @@ def background_main(
         )
         if not streams or len({item.stream_id for item in streams}) != len(streams):
             raise ValueError("device streams must be non-empty and uniquely identified")
+        logger.info(
+            "Device connected with streams: %s",
+            ", ".join(item.stream_id for item in streams),
+        )
     except (DeviceError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.exception("Acquisition worker startup failed")
         ack_queue.put(ErrorAck(str(exc)))
         return
     rings: dict[str, SeqlockRingBuffer] = {}
@@ -94,6 +105,7 @@ def background_main(
             shms[spec.stream_id] = shm
             rings[spec.stream_id] = ring
     except (OSError, ValueError) as exc:
+        logger.exception("Could not allocate shared memory")
         ack_queue.put(ErrorAck(str(exc)))
         device.disconnect()
         for shm in shms.values():
@@ -214,11 +226,13 @@ def background_main(
                 and not fatal_sent
             ):
                 if fatal_queue is not None:
+                    logger.error("Acquisition thread failed: %s", acquisition.failure)
                     fatal_queue.put(
                         WorkerFatal("acquisition_failure", str(acquisition.failure))
                     )
                 fatal_sent = True
     finally:
+        logger.info("Acquisition worker shutting down")
         stop_event.set()
         device.disconnect()
         acquisition.join(timeout=5)
@@ -231,3 +245,4 @@ def background_main(
                 shm.unlink()
             except OSError:
                 pass
+        logger.info("Acquisition worker stopped")

@@ -1,5 +1,6 @@
 """IPC command dispatcher."""
 
+import logging
 import queue
 from multiprocessing import Queue
 
@@ -19,6 +20,8 @@ from sifi_streamer.protocol import (
     StopCapture,
     StopSegment,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CommandHandler:
@@ -90,7 +93,9 @@ class CommandHandler:
                     )
                     self._ack.put(MarkerAdded(identifier))
                 case Shutdown():
+                    logger.info("Worker received shutdown command")
                     return True
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("Worker command %s failed: %s", type(command).__name__, exc)
             self._ack.put(ErrorAck(str(exc)))
         return False

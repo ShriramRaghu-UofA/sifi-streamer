@@ -1,17 +1,69 @@
 @import "tailwindcss";
 @plugin "daisyui" {
-  themes: business --default;
+  themes:
+    dracula --default,
+    nord,
+    light;
 }
 
 @layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  html[data-theme="nord"],
+  html[data-theme="light"] {
+    color-scheme: light;
+  }
+
   body {
-    @apply min-h-screen bg-base-300 text-base-content;
+    @apply min-h-screen bg-base-200 text-base-content antialiased;
+    background-image:
+      radial-gradient(
+        circle at 15% -10%,
+        color-mix(in oklab, var(--color-primary) 15%, transparent) 0,
+        transparent 32rem
+      ),
+      radial-gradient(
+        circle at 90% 10%,
+        color-mix(in oklab, var(--color-secondary) 10%, transparent) 0,
+        transparent 28rem
+      );
+    background-attachment: fixed;
   }
 
   code {
     @apply text-info;
     overflow-wrap: anywhere;
   }
+}
+
+.surface-card {
+  @apply rounded-2xl border border-base-content/10 bg-base-100/90 shadow-lg shadow-base-content/5 backdrop-blur;
+}
+
+.eyebrow {
+  @apply text-xs font-bold uppercase tracking-[0.16em] text-primary;
+}
+
+.field-label {
+  @apply mb-1.5 block text-sm font-medium;
+}
+
+.field-help {
+  @apply mt-1.5 text-xs leading-relaxed text-base-content/60;
+}
+
+.metric-grid {
+  @apply grid grid-cols-[auto_1fr] gap-x-5 gap-y-1.5 text-sm;
+}
+
+.metric-grid dt {
+  @apply text-base-content/60;
+}
+
+.metric-grid dd {
+  @apply text-right font-medium;
 }
 
 .plot,

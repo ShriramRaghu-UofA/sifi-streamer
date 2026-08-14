@@ -1,6 +1,7 @@
 """Loopback-only local web launcher for monitored captures."""
 
 import json
+import logging
 import mimetypes
 import secrets
 import threading
@@ -25,6 +26,8 @@ from sifi_streamer.health_log import HealthLogWriter, default_health_path
 from sifi_streamer.monitor import CaptureRuntime
 
 type RuntimeFactory = Callable[[str, Attributes], CaptureRuntime]
+
+logger = logging.getLogger(__name__)
 
 
 def _wire(value: Any) -> Any:
@@ -115,6 +118,7 @@ class WebCaptureCoordinator:
             if enabled and health_path.exists():
                 raise FileExistsError(f"health log already exists: {health_path}")
             self._state = "starting"
+            logger.info("Starting capture %r at %s", capture_id, self.output)
             runtime = self._factory(capture_id, validate_attributes(attributes or {}))
             if thresholds is not None:
                 self._thresholds = thresholds
@@ -134,11 +138,13 @@ class WebCaptureCoordinator:
                         },
                     )
             except BaseException:
+                logger.exception("Capture %r failed during startup", capture_id)
                 runtime.controller.close("startup_failure")
                 self._state = "failed"
                 raise
             self._runtime = runtime
             self._state = "recording"
+            logger.info("Capture %r is recording", capture_id)
             self._monitor_thread = threading.Thread(
                 target=self._monitor_loop,
                 daemon=True,
@@ -153,6 +159,7 @@ class WebCaptureCoordinator:
                     return
                 self._refresh_health()
                 if (fatal := self._runtime.monitor.fatal()) is not None:
+                    logger.error("Worker failure [%s]: %s", fatal.code, fatal.message)
                     self._error = fatal.message
                     try:
                         self._close_locked(fatal.code)
@@ -165,13 +172,25 @@ class WebCaptureCoordinator:
         if self._runtime is None:
             return None
         snapshot = self._runtime.monitor.latest()
-        if snapshot is not None and self._health_log is not None:
-            if snapshot.monotonic_time - self._last_logged_health >= 1:
+        if snapshot is not None:
+            if (
+                self._health_log is not None
+                and snapshot.monotonic_time - self._last_logged_health >= 1
+            ):
                 self._health_log.append("health_snapshot", snapshot)
                 self._last_logged_health = snapshot.monotonic_time
             events = self._runtime.monitor.events
             for event in events[self._logged_events :]:
-                self._health_log.append("health_event", event)
+                if self._health_log is not None:
+                    self._health_log.append("health_event", event)
+                message = "%s health %s [%s]: %s"
+                arguments = (
+                    event.stream_id or "acquisition",
+                    "warning" if event.active else "recovered",
+                    event.code,
+                    event.message,
+                )
+                (logger.warning if event.active else logger.info)(message, *arguments)
             self._logged_events = len(events)
         return snapshot
 
@@ -183,6 +202,7 @@ class WebCaptureCoordinator:
 
     def _close_locked(self, reason: str) -> None:
         self._state = "stopping"
+        logger.info("Stopping capture with reason %r", reason)
         self._stop_monitor.set()
         try:
             if self._runtime is not None:
@@ -195,10 +215,12 @@ class WebCaptureCoordinator:
                 self._health_log.close()
                 self._health_log = None
             self._state = "stopped" if self._error is None else "failed"
+            logger.info("Capture stopped with state %s", self._state)
 
     def update_thresholds(self, thresholds: HealthThresholds) -> None:
         with self._lock:
             self._thresholds = thresholds
+            logger.info("Updated signal health thresholds")
             if self._runtime is not None:
                 self._runtime.monitor.update_thresholds(thresholds)
             if self._health_log is not None:
@@ -207,12 +229,14 @@ class WebCaptureCoordinator:
     def set_kind(self, definition: AnnotationKindDefinition) -> None:
         with self._lock:
             self._kinds.set(definition)
+            logger.info("Set %s annotation kind %r", definition.target, definition.kind)
             if self._health_log is not None:
                 self._health_log.append("annotation_kind_set", definition)
 
     def remove_kind(self, target: AnnotationTarget, kind: str) -> None:
         with self._lock:
             self._kinds.remove(target, kind)
+            logger.info("Removed %s annotation kind %r", target, kind)
             if self._health_log is not None:
                 self._health_log.append(
                     "annotation_kind_removed", {"target": target, "kind": kind}
@@ -233,6 +257,7 @@ class WebCaptureCoordinator:
             )
             values = self._kind_attributes(AnnotationTarget.MARKER, kind, attributes)
             runtime.controller.marker(identifier, kind, values)
+            logger.info("Added marker %r (kind %r)", identifier, kind)
             return identifier
 
     def start_segment(
@@ -251,6 +276,7 @@ class WebCaptureCoordinator:
             values = self._kind_attributes(AnnotationTarget.SEGMENT, kind, attributes)
             runtime.controller.start_segment(identifier, kind, values)
             self._active_segments.append(identifier)
+            logger.info("Started segment %r (kind %r)", identifier, kind)
             return identifier
 
     def stop_segment(self, identifier: str, reason: str = "completed") -> None:
@@ -260,6 +286,7 @@ class WebCaptureCoordinator:
                 raise RuntimeError("only the most recently started segment can stop")
             runtime.controller.stop_segment(identifier, reason)
             self._active_segments.pop()
+            logger.info("Stopped segment %r with reason %r", identifier, reason)
 
     def _kind_attributes(
         self,
@@ -444,6 +471,7 @@ class _Handler(BaseHTTPRequestHandler):
             ValueError,
             OSError,
         ) as exc:
+            logger.warning("API request %s failed: %s", self.path, exc)
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
         self._json(HTTPStatus.OK, value)
@@ -458,7 +486,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def log_message(self, format: str, *args: object) -> None:
-        return
+        logger.debug("HTTP %s - %s", self.address_string(), format % args)
 
 
 def _thresholds(value: Any) -> HealthThresholds | None:
@@ -513,12 +541,15 @@ def serve_capture_web(
     server.token = token
     server.origin = f"http://127.0.0.1:{server.server_port}"
     url = f"{server.origin}/#{token}"
+    logger.info("Capture dashboard listening at %s", server.origin)
     print(f"Capture dashboard: {url}", flush=True)
     if open_browser:
         webbrowser.open(url, new=2)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        logger.info("Operator interrupt received")
         coordinator.stop("operator_interrupt")
     finally:
         server.server_close()
+        logger.info("Capture dashboard stopped")

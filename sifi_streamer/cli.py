@@ -1,6 +1,7 @@
 """Standalone SiFi capture command."""
 
 import argparse
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -50,6 +51,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     The command refuses an existing output path, validates mode arguments before
     starting hardware, and owns controller startup and shutdown through a runner.
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.duration is not None and args.duration <= 0:

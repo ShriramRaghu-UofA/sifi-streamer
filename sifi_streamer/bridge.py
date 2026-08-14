@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import logging
 import os
 import queue
 import socket
@@ -24,6 +25,8 @@ from sifi_streamer.devices import (
     streams_from_modalities,
 )
 from sifi_streamer.exceptions import DeviceError
+
+logger = logging.getLogger(__name__)
 
 EMG_SAMPLE_RATES = frozenset((500, 1000, 1600, 2000))
 
@@ -207,6 +210,13 @@ class SiFiBridgeDevice:
         if self._transport is BridgeTransport.UDP:
             self._reader.connect()
         try:
+            logger.info(
+                "Connecting SiFi bridge via %s at %s:%d (EMG %d Hz)",
+                self._transport,
+                self._host,
+                self._port,
+                self._emg_sample_rate,
+            )
             self._launch()
             self._send("connect")
             self._send(f"configure emg --fs {self._emg_sample_rate}")
@@ -218,7 +228,9 @@ class SiFiBridgeDevice:
                 self._connect_tcp_when_ready()
             elif self._transport is BridgeTransport.STDOUT:
                 self._reader.connect()
+            logger.info("SiFi bridge connected")
         except DeviceError, OSError, ValueError:
+            logger.exception("SiFi bridge connection failed")
             self.disconnect()
             raise
 
@@ -234,6 +246,7 @@ class SiFiBridgeDevice:
         process, self._process = self._process, None
         if process is None:
             return
+        logger.info("Stopping SiFi bridge process")
         if process.stdin is not None:
             try:
                 process.stdin.write("stop\nexit\n")
@@ -248,11 +261,13 @@ class SiFiBridgeDevice:
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
+                logger.warning("SiFi bridge did not terminate; killing it")
                 process.kill()
         for stream in (process.stdout, process.stderr):
             if stream is not None:
                 with contextlib.suppress(OSError, ValueError):
                     stream.close()
+        logger.info("SiFi bridge disconnected")
 
     def read_packet(self) -> SiFiPacket:
         """Return the next packet from the selected transport.
@@ -291,6 +306,10 @@ class SiFiBridgeDevice:
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if windows else 0,
                 start_new_session=not windows,
             )
+            logger.info(
+                "Launched SiFi bridge process (pid=%s)",
+                getattr(self._process, "pid", "unknown"),
+            )
         except OSError as exc:
             raise DeviceError(f"Unable to launch sifibridge: {exc}") from exc
         threading.Thread(target=self._read_stdout, daemon=True).start()
@@ -323,13 +342,16 @@ class SiFiBridgeDevice:
         process = self._process
         if process is not None and process.stderr is not None:
             for line in process.stderr:
-                self._stderr_lines.append(line.rstrip())
+                message = line.rstrip()
+                self._stderr_lines.append(message)
+                logger.warning("sifibridge: %s", message)
 
     def _send(self, command: str) -> None:
         if self._process is None or self._process.stdin is None:
             raise DeviceError("sifibridge process is not running")
         self._process.stdin.write(command + "\n")
         self._process.stdin.flush()
+        logger.debug("Sent sifibridge command: %s", command)
 
     def _wait_for_info(self) -> dict[str, object]:
         deadline = time.monotonic() + self._startup_timeout_s
