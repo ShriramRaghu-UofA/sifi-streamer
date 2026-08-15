@@ -78,8 +78,11 @@
   let newKindDefaults = $state('{}');
   let kindAttributes = $state<Record<string, string>>({});
   let theme = $state<Theme>('dracula');
+  let shuttingDown = $state(false);
+  let dashboardClosed = $state(false);
+  let closeBlocked = $state(false);
 
-  let phase = $derived(live?.state ?? bootstrap?.state ?? 'loading');
+  let phase = $derived(dashboardClosed ? 'closed' : (live?.state ?? bootstrap?.state ?? 'loading'));
   let streams = $derived(bootstrap?.streams ?? []);
   let kinds = $derived(live?.kinds ?? bootstrap?.kinds ?? []);
 
@@ -140,6 +143,42 @@
     }
   }
 
+  async function stopCapture() {
+    busy = true;
+    error = '';
+    notice = '';
+    try {
+      bootstrap = await api<Bootstrap>('/api/capture/stop', {});
+      live = null;
+      notice = 'Capture stopped and flushed';
+    } catch (cause) {
+      error = String(cause);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function exitDashboard() {
+    busy = true;
+    error = '';
+    notice = '';
+    shuttingDown = true;
+    try {
+      await api('/api/server/stop', {});
+    } catch {
+      // The local server may finish shutting down before the browser receives
+      // its response. That disconnect is expected after an explicit exit.
+    } finally {
+      dashboardClosed = true;
+      busy = false;
+    }
+  }
+
+  function closeTab() {
+    window.close();
+    window.setTimeout(() => closeBlocked = true, 150);
+  }
+
   async function startCapture() {
     const attributes = parseAttributes(attributesText, 'Capture metadata');
     if (!attributes) return;
@@ -152,7 +191,7 @@
   }
 
   async function poll() {
-    if (!bootstrap || phase === 'setup' || phase === 'loading') return;
+    if (!bootstrap || shuttingDown || dashboardClosed || phase === 'setup' || phase === 'loading' || phase === 'stopped') return;
     try {
       const update = await api<Live>('/api/live', { cursors });
       live = update;
@@ -256,9 +295,9 @@
           {:else}
             <div class="mt-6 flex flex-wrap gap-3">
               {#if phase === 'recording'}
-                <button class="btn btn-error" disabled={busy} onclick={() => command('/api/capture/stop', {}, 'Capture stopped and flushed')}>Stop and save capture</button>
+                <button class="btn btn-error" disabled={busy} onclick={stopCapture}>Stop and save capture</button>
               {:else}
-                <button class="btn" onclick={() => command('/api/server/stop', {}, 'Dashboard is shutting down')}>Exit dashboard</button>
+                <button class="btn" disabled={busy} onclick={exitDashboard}>{busy ? 'Exiting…' : 'Exit dashboard'}</button>
               {/if}
             </div>
           {/if}
@@ -267,11 +306,17 @@
         <aside class="border-t border-base-content/10 bg-base-200/50 p-5 sm:p-7 lg:border-l lg:border-t-0">
           <p class="eyebrow">Destination</p>
           <code class="mt-2 block rounded-lg bg-base-300/70 p-3 text-xs leading-relaxed">{bootstrap.output}</code>
-          <dl class="mt-6 grid gap-4">
-            {#each Object.entries(bootstrap.configuration) as [key, value] (key)}
-              <div><dt class="text-xs font-semibold uppercase tracking-wider text-base-content/50">{key.replaceAll('_', ' ')}</dt><dd class="mt-1 break-words text-sm font-medium">{String(value)}</dd></div>
-            {/each}
-          </dl>
+          <details class="group mt-5 rounded-xl border border-base-content/10 bg-base-100/55">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3 p-4">
+              <span><span class="block text-sm font-semibold">Device configuration</span><span class="mt-0.5 block text-xs text-base-content/55">{Object.keys(bootstrap.configuration).length} settings</span></span>
+              <span class="text-lg transition-transform group-open:rotate-45" aria-hidden="true">+</span>
+            </summary>
+            <dl class="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-x-5 gap-y-4 border-t border-base-content/10 p-4">
+              {#each Object.entries(bootstrap.configuration) as [key, value] (key)}
+                <div class="min-w-0"><dt class="text-xs font-semibold uppercase tracking-wider text-base-content/50">{key.replaceAll('_', ' ')}</dt><dd class="mt-1 break-words text-sm font-medium">{String(value)}</dd></div>
+              {/each}
+            </dl>
+          </details>
         </aside>
       </div>
     </section>
@@ -363,4 +408,16 @@
       <section class="surface-card p-5 sm:p-7"><h2 class="text-xl font-semibold">Health events</h2><p class="mt-1 text-sm text-base-content/60">Changes in signal health detected from the rules above.</p><ul class="mt-3 max-h-64 overflow-auto">{#each live.events.slice(-30).reverse() as event (event.sequence)}<li class="border-b border-base-content/10 py-3 text-sm"><span class={['badge mr-2', event.active ? 'badge-warning' : 'badge-success']}>{event.active ? 'WARN' : 'OK'}</span>{event.stream_id ?? 'acquisition'} — {event.message}</li>{/each}</ul></section>
     {/if}
   </main>
+{/if}
+
+{#if dashboardClosed}
+  <div class="fixed inset-0 z-50 grid place-items-center bg-base-300/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="shutdown-title">
+    <section class="surface-card w-full max-w-md p-6 text-center sm:p-8">
+      <div class="mx-auto grid size-12 place-items-center rounded-full bg-success/15 text-2xl text-success" aria-hidden="true">✓</div>
+      <h2 id="shutdown-title" class="mt-4 text-2xl font-semibold">Dashboard closed</h2>
+      <p class="mt-2 text-sm leading-relaxed text-base-content/65">The local capture server has shut down. Your capture is saved and it is safe to close this tab.</p>
+      <button class="btn btn-primary mt-6" onclick={closeTab}>Close this tab</button>
+      {#if closeBlocked}<p class="mt-3 text-xs text-base-content/55">Your browser prevented automatic closing. You can close this tab normally.</p>{/if}
+    </section>
+  </div>
 {/if}

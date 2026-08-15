@@ -436,11 +436,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return {}
             if path == "/api/server/stop":
                 coordinator.stop("operator_request")
-                threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return {}
             raise LookupError("unknown API route")
 
-        self._api(action)
+        succeeded = self._api(action)
+        if path == "/api/server/stop" and succeeded:
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     def _body(self) -> dict[str, Any]:
         if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -453,14 +454,14 @@ class _Handler(BaseHTTPRequestHandler):
             raise ValueError("request JSON must be an object")
         return value
 
-    def _api(self, callback: Callable[[], object]) -> None:
+    def _api(self, callback: Callable[[], object]) -> bool:
         if self.headers.get("X-SiFi-Session-Token") != self.server.token:
             self._json(HTTPStatus.UNAUTHORIZED, {"error": "invalid session token"})
-            return
+            return False
         origin = self.headers.get("Origin")
         if origin is not None and origin != self.server.origin:
             self._json(HTTPStatus.FORBIDDEN, {"error": "invalid origin"})
-            return
+            return False
         try:
             value = callback()
         except (
@@ -473,8 +474,9 @@ class _Handler(BaseHTTPRequestHandler):
         ) as exc:
             logger.warning("API request %s failed: %s", self.path, exc)
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-            return
+            return False
         self._json(HTTPStatus.OK, value)
+        return True
 
     def _json(self, status: HTTPStatus, value: object) -> None:
         data = json.dumps(_wire(value), allow_nan=False).encode()
