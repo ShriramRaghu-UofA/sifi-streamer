@@ -5,7 +5,7 @@ No changes to either consumer repository were made in this extraction.
 Add the shared dependency to both repositories:
 
 ```powershell
-uv add "sifi-streamer @ git+ssh://git@github.com/BLINCdev/sifi-streamer.git@v0.5.0"
+uv add "sifi-streamer @ git+ssh://git@github.com/BLINCdev/sifi-streamer.git@v0.6.0"
 ```
 
 Equivalent metadata:
@@ -15,7 +15,7 @@ Equivalent metadata:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.5.0" }
+sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.0" }
 ```
 
 ## cognitive-load-validation
@@ -27,8 +27,11 @@ sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag =
    Generic injected-device and monitoring imports belong under
    `sifi_streamer.acquisition`.
 4. Keep participant paths, manifests, task suites, task-specific runners, and
-   Parquet policy in the cognitive repository. Its CLI becomes a thin wrapper
-   around `create_sifi_capture` and the shared runner functions.
+   task-specific table enrichment in the cognitive repository. Use
+   `read_sifi_capture_tables()` for canonical signal and annotation extraction,
+   then apply presentation, repeat, and labeling policy in that consumer. Its
+   capture CLI remains a thin wrapper around `create_sifi_capture` and the
+   shared runner functions.
 5. Replace trial/presentation controller helpers with consumer functions that
    call generic segments and markers. Segment boundaries no longer generate
    duplicate markers.

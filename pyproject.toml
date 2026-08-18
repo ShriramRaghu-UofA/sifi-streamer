@@ -1,6 +1,6 @@
 [project]
 name = "sifi-streamer"
-version = "0.5.0"
+version = "0.6.0"
 description = "Reusable SiFi acquisition, live streaming, and authoritative capture logging"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -14,12 +14,15 @@ sifi-capture = "sifi_streamer.sifi.cli.capture:main"
 sifi-capture-web = "sifi_streamer.web.cli:main"
 sifi-download-bridge = "sifi_streamer.sifi.bridge_install:main"
 sifi-sensor-profile = "sifi_streamer.sifi.cli.sensor_profile:main"
+sifi-capture-to-parquet = "sifi_streamer.sifi.cli.export:main"
 
 [project.optional-dependencies]
 parquet = ["pandas>=3", "pyarrow>=24"]
 
 [dependency-groups]
 dev = [
+    "pandas>=3",
+    "pyarrow>=24",
     "ruff>=0.16.1",
     "ty>=0.0.71",
 ]

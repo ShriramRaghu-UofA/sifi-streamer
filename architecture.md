@@ -67,6 +67,14 @@ the recorder writes that complete document as the first `raw_packet` after
 including firmware, configuration, and reported sample rates, in the
 authoritative artifact without changing schema v2.
 
+Optional SiFi table extraction is a derived, non-authoritative boundary.
+`sifi_streamer.sifi.export` validates known SiFi packet layouts and exposes
+capture, stream, marker, segment, and per-modality pandas tables. Capture
+sequence and the recorded clocks are preserved so consumers can join tables
+without the package interpreting marker or segment kinds. Parquet datasets are
+published only as a convenience representation; cognitive labeling, attempt
+selection, supersession, and other application policies remain downstream.
+
 ## Ownership rule
 
 > Only the launcher or component that starts a capture closes it. Code

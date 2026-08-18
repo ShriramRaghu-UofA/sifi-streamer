@@ -184,6 +184,43 @@ line, returning `None` for malformed/non-object JSON.
 `None`. `capture_document()` returns the original complete JSON object when one
 was parsed, preserving unknown device fields.
 
+### Canonical SiFi tables and Parquet
+
+Install the `parquet` extra before importing `sifi_streamer.sifi.export`.
+`read_sifi_capture_tables(path)` returns a frozen `SiFiCaptureTables` value with
+five views of one capture:
+
+- `capture`: one row containing capture identity, lifecycle clocks/reason, and
+  `attribute_*` columns;
+- `streams`: one row per declared or observed modality channel, including its
+  order, dtype, nominal rate, and whether that rate came from device info, a
+  packet, or defaults;
+- `markers`: point facts with capture sequence, host clocks, optional source
+  clock, and attributes;
+- `segments`: paired generic intervals with start/stop sequences and clocks,
+  stop reason, and start attributes; an open interval has null stop fields;
+- `signals`: a mapping from `Modality` to sample-level DataFrames with packet
+  sequence, sample index, distinct device/bridge/host clocks, health fields,
+  and canonical channel columns.
+
+A packet belongs to a segment exactly when its sequence is greater than the
+segment's start sequence and less than its stop sequence. This ordering rule is
+authoritative; host timestamps remain packet-level, and the exporter does not
+invent per-sample host timestamps or translate between clock domains.
+
+Attributes are normalized to lowercase `attribute_*` columns. Integer and
+floating values may share a numeric column; incompatible scalar types and
+distinct keys that normalize to the same column are rejected. Known SiFi
+packets are also rejected when timestamps or canonical channel arrays are
+malformed, rather than silently dropping samples.
+
+`export_sifi_capture_to_parquet(path, output=None, force=False)` writes
+`capture.parquet`, `streams.parquet`, `markers.parquet`, `segments.parquet`, and
+`signals/<modality>.parquet` through a temporary directory. Existing output is
+refused unless `force=True`. The `sifi-capture-to-parquet` command exposes the
+same operation. These tables are derived and do not interpret marker/segment
+kinds, supersession, trials, presentations, or downstream labeling policy.
+
 SiFi device classes satisfy the generic `AcquisitionDevice` protocol through
 their `streams` property. `PacketReader` is a narrower structural protocol used
 only by bridge transports.

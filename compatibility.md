@@ -44,6 +44,11 @@ not retained; capture-wire compatibility remains unchanged.
 Health sidecars and web annotation-kind definitions do not add records to or
 change the meaning of schema-v2 captures.
 
+The optional SiFi table schema is versioned independently from capture schema
+v2. It preserves generic annotations and known SiFi samples but does not promise
+the column layout of earlier consumer-owned Parquet scripts. Adding or changing
+the exporter does not change the authoritative capture wire contract.
+
 The former `emg_sample_rate` factory argument was deliberately replaced by the
 complete `sensor_profile` API. The standalone `--emg-sample-rate` option was
 replaced by profile selection plus `--emg-fs`. This is an API/CLI break but not

@@ -32,7 +32,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.5.0" }
+sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.0" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential
@@ -304,8 +304,29 @@ concatenated Zstandard frames. New files use exclusive creation and are never
 rewritten. When supplied by the connected device, its complete startup-info
 document is preserved as the first raw packet after capture start; for SiFi
 hardware this includes the bridge-reported firmware, configuration, and sample
-rates. Optional Parquet dependencies are available with
-`sifi-streamer[parquet]`; conversion is not authoritative.
+rates.
+
+Install `sifi-streamer[parquet]` for canonical SiFi pandas tables and derived
+Parquet datasets:
+
+```python
+from pathlib import Path
+
+from sifi_streamer.sifi import Modality
+from sifi_streamer.sifi.export import read_sifi_capture_tables
+
+tables = read_sifi_capture_tables(Path("session.capture.jsonl.zst"))
+emg = tables.signals[Modality.EMG]
+```
+
+```powershell
+sifi-capture-to-parquet session.capture.jsonl.zst
+```
+
+The exporter writes a dataset directory containing capture, stream, marker,
+segment, and per-modality signal tables. It preserves record sequence and all
+recorded clock domains but does not interpret application-defined kinds or
+filter incomplete/superseded attempts. Conversion is not authoritative.
 
 See the [Python API reference](api.md), [architecture.md](architecture.md),
 [migration.md](migration.md), [compatibility.md](compatibility.md), and

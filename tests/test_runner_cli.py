@@ -9,6 +9,7 @@ from sifi_streamer.capture import (
     run_until_interrupt,
 )
 from sifi_streamer.sifi.cli.capture import build_parser
+from sifi_streamer.sifi.cli.export import build_parser as build_export_parser
 
 
 class Backend:
@@ -75,6 +76,11 @@ class RunnerTests(unittest.TestCase):
             parser.parse_args(
                 ["x.zst", "--capture-id", "x", "--duration", "1", "--interactive"]
             )
+
+    def test_export_cli_help_parser_does_not_import_optional_dependencies(self) -> None:
+        args = build_export_parser().parse_args(["capture.zst", "--force"])
+        self.assertEqual(args.output, None)
+        self.assertTrue(args.force)
 
 
 if __name__ == "__main__":
