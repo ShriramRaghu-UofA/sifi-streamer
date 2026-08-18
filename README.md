@@ -28,6 +28,37 @@ production.
 
 ## Bridge download
 
+### Vendor dependency and license
+
+This project uses [SiFi Bridge](https://github.com/SiFiLabs/sifi-bridge-pub),
+proprietary vendor software provided by **SiFi Labs Inc.** SiFi Bridge is free
+to use but is not open-source software, and this project's license does not
+apply to it. Software built on it should credit it as "SiFi Bridge (SiFi Labs
+Inc.)." The tested bridge release is pinned below because the bridge is still
+in beta and later releases may introduce incompatible changes.
+
+SiFi Labs Inc. grants permission to download, install, and run the SiFi Bridge
+CLI, including in academic, commercial, and publicly demonstrated projects,
+subject to these terms:
+
+- Redistribute the binary only unmodified and with this notice included;
+  linking to the [official release](https://github.com/SiFiLabs/sifi-bridge-pub/releases)
+  is preferred.
+- Do not modify, decompile, reverse engineer, or attempt to derive the source
+  code of the binary.
+- Including SiFi Bridge in an open-source project does not place it under that
+  project's license.
+- Use of the SiFi Labs name or logo in a way that suggests endorsement,
+  sponsorship, or validation requires written permission.
+- SiFi devices and SiFi Bridge are intended for research and development use.
+  They are not medical devices and must not be used for diagnosis, treatment,
+  or any application where failure could cause injury.
+- SiFi Bridge is provided as is, without warranty of any kind. SiFi Labs Inc.
+  accepts no liability for its use.
+
+Questions about a specific use case should be sent to
+[contact@sifilabs.com](mailto:contact@sifilabs.com).
+
 Bridge acquisition is always an explicit user action. Installing this package
 or starting a capture never downloads or updates vendor software.
 
