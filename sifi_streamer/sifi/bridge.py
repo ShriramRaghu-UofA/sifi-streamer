@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import platform
 import queue
 import socket
 import subprocess
@@ -34,6 +35,15 @@ from sifi_streamer.sifi.sensor_profile import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def bridge_executable_name(system: str | None = None) -> str:
+    """Return the vendor bridge executable name for an operating system."""
+    operating_system = (system or platform.system()).lower()
+    return "sifibridge.exe" if operating_system == "windows" else "sifibridge"
+
+
+DEFAULT_BRIDGE_EXECUTABLE = Path("bin") / bridge_executable_name()
 
 
 class BridgeTransport(StrEnum):
@@ -136,7 +146,7 @@ class SiFiBridgeDevice:
         self,
         host: str = "127.0.0.1",
         port: int = 5000,
-        executable: str | Path = "bin/sifibridge.exe",
+        executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
         startup_timeout_s: float = 20.0,
         transport: BridgeTransport | str = BridgeTransport.TCP,
         sensor_profile: SiFiSensorProfile = ALL_SENSORS_PROFILE,

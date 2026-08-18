@@ -5,7 +5,7 @@ No changes to either consumer repository were made in this extraction.
 Add the shared dependency to both repositories:
 
 ```powershell
-uv add "sifi-streamer @ git+ssh://git@github.com/BLINCdev/sifi-streamer.git@v0.6.0"
+uv add "sifi-streamer @ git+ssh://git@github.com/BLINCdev/sifi-streamer.git@v0.6.1"
 ```
 
 Equivalent metadata:
@@ -15,7 +15,7 @@ Equivalent metadata:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.0" }
+sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.1" }
 ```
 
 ## cognitive-load-validation

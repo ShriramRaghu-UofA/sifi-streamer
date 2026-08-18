@@ -32,7 +32,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.0" }
+sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.1" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential
@@ -104,6 +104,8 @@ uv run sifi-download-bridge --tag 2.0.0-b21 --output-directory C:\tools\sifi
 The utility auto-detects supported Windows, macOS, and Linux architectures,
 uses only Python's standard-library `urllib`, verifies the release asset's
 SHA-256 before installation, and extracts the nested `sifibridge` executable.
+Capture commands default to `bin/sifibridge.exe` on Windows and
+`bin/sifibridge` on macOS and Linux.
 It writes `sifibridge-manifest.json` beside the executable with the release
 version, asset, verified SHA-256, source URL, and installation time. Latest and
 specific-tag modes refuse to install an asset if GitHub does not publish a

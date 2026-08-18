@@ -11,7 +11,7 @@ from sifi_streamer.capture.runners import (
     run_timed_capture,
     run_until_interrupt,
 )
-from sifi_streamer.sifi.bridge import BridgeTransport
+from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE, BridgeTransport
 from sifi_streamer.sifi.cli.sensor_options import (
     add_sensor_arguments,
     resolve_sensor_profile,
@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--interactive", action="store_true", help="Accept marker and segment commands"
     )
     parser.add_argument(
-        "--bridge-executable", type=Path, default=Path("bin/sifibridge.exe")
+        "--bridge-executable", type=Path, default=DEFAULT_BRIDGE_EXECUTABLE
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)

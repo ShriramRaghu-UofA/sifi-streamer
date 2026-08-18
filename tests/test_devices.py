@@ -22,9 +22,11 @@ from sifi_streamer.capture import CaptureLogReader, RawPacket
 from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi import SyntheticSiFiDevice
 from sifi_streamer.sifi.bridge import (
+    DEFAULT_BRIDGE_EXECUTABLE,
     BridgeTransport,
     SiFiBridgeDevice,
     _UdpPacketReader,
+    bridge_executable_name,
 )
 from sifi_streamer.sifi.devices import (
     Modality,
@@ -54,6 +56,12 @@ class FakeProcess:
 
 
 class DeviceTests(unittest.TestCase):
+    def test_bridge_executable_name_is_platform_specific(self) -> None:
+        self.assertEqual(bridge_executable_name("Windows"), "sifibridge.exe")
+        self.assertEqual(bridge_executable_name("Linux"), "sifibridge")
+        self.assertEqual(bridge_executable_name("Darwin"), "sifibridge")
+        self.assertEqual(SiFiBridgeDevice()._executable, DEFAULT_BRIDGE_EXECUTABLE)
+
     def test_modality_parsing_and_packet_preservation(self) -> None:
         modalities = modalities_from_device_info(
             {

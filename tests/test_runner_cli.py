@@ -8,8 +8,10 @@ from sifi_streamer.capture import (
     parse_scalar,
     run_until_interrupt,
 )
+from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE
 from sifi_streamer.sifi.cli.capture import build_parser
 from sifi_streamer.sifi.cli.export import build_parser as build_export_parser
+from sifi_streamer.web.cli import build_parser as build_web_parser
 
 
 class Backend:
@@ -76,6 +78,12 @@ class RunnerTests(unittest.TestCase):
             parser.parse_args(
                 ["x.zst", "--capture-id", "x", "--duration", "1", "--interactive"]
             )
+
+    def test_capture_commands_use_platform_bridge_default(self) -> None:
+        capture_args = build_parser().parse_args(["x.zst", "--capture-id", "x"])
+        web_args = build_web_parser().parse_args(["x.zst"])
+        self.assertEqual(capture_args.bridge_executable, DEFAULT_BRIDGE_EXECUTABLE)
+        self.assertEqual(web_args.bridge_executable, DEFAULT_BRIDGE_EXECUTABLE)
 
     def test_export_cli_help_parser_does_not_import_optional_dependencies(self) -> None:
         args = build_export_parser().parse_args(["capture.zst", "--force"])

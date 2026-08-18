@@ -8,7 +8,7 @@ from pathlib import Path
 
 from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.capture.runners import parse_attributes
-from sifi_streamer.sifi.bridge import BridgeTransport
+from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE, BridgeTransport
 from sifi_streamer.sifi.cli.sensor_options import (
     add_sensor_arguments,
     resolve_sensor_profile,
@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attribute", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--kinds-file", type=Path)
     parser.add_argument(
-        "--bridge-executable", type=Path, default=Path("bin/sifibridge.exe")
+        "--bridge-executable", type=Path, default=DEFAULT_BRIDGE_EXECUTABLE
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)

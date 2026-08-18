@@ -14,7 +14,11 @@ from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.acquisition.runtime import CaptureRuntime
 from sifi_streamer.capture.controller import CaptureController
 from sifi_streamer.capture.records import Scalar
-from sifi_streamer.sifi.bridge import BridgeTransport, SiFiBridgeDevice
+from sifi_streamer.sifi.bridge import (
+    DEFAULT_BRIDGE_EXECUTABLE,
+    BridgeTransport,
+    SiFiBridgeDevice,
+)
 from sifi_streamer.sifi.devices import SyntheticSiFiDevice
 from sifi_streamer.sifi.sensor_profile import SiFiSensorProfile
 
@@ -47,7 +51,7 @@ def create_sifi_capture(
     capture_id: str,
     attributes: Mapping[str, Scalar] | None = None,
     *,
-    bridge_executable: str | Path = "bin/sifibridge.exe",
+    bridge_executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.TCP,
@@ -80,7 +84,7 @@ def create_sifi_capture_runtime(
     capture_id: str,
     attributes: Mapping[str, Scalar] | None = None,
     *,
-    bridge_executable: str | Path = "bin/sifibridge.exe",
+    bridge_executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.TCP,
