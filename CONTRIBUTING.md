@@ -35,7 +35,7 @@ changed public APIs and non-obvious boundaries should have precise type hints.
 ## Dashboard development
 
 Normal package installation does not require Node.js. The compiled dashboard
-is stored in `sifi_streamer/web_assets` and is included in wheels and Git-based
+is stored in `sifi_streamer/web/assets` and is included in wheels and Git-based
 installs. Node.js is required only when editing the frontend source.
 
 Install exactly the locked frontend dependencies and validate the source:
@@ -49,9 +49,9 @@ Pop-Location
 ```
 
 `npm run build` writes the deployable files directly to
-`sifi_streamer/web_assets`. Commit those regenerated files with the frontend
+`sifi_streamer/web/assets`. Commit those regenerated files with the frontend
 source and `frontend/package-lock.json`. Never commit `frontend/node_modules`.
-Do not hand-edit generated files in `sifi_streamer/web_assets`.
+Do not hand-edit generated files in `sifi_streamer/web/assets`.
 
 When changing a `.svelte` file, follow the repository's Svelte skill guidance
 and keep the Svelte checker clean. Rebuilding is required even when a source

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from sifi_streamer.capture import Scalar, validate_attributes
+from sifi_streamer.capture.records import Scalar, validate_attributes
 
 
 class AnnotationTarget(StrEnum):

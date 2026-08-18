@@ -9,7 +9,7 @@ import logging
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
-from sifi_streamer.capture import Attributes, Scalar, validate_attributes
+from sifi_streamer.capture.records import Attributes, Scalar, validate_attributes
 from sifi_streamer.exceptions import CaptureInitializationError
 
 logger = logging.getLogger(__name__)

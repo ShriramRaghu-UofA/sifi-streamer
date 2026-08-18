@@ -14,20 +14,20 @@ from collections import deque
 from enum import StrEnum
 from pathlib import Path
 
-from sifi_streamer.devices import (
+from sifi_streamer.acquisition.devices import SignalStreamSpec
+from sifi_streamer.exceptions import DeviceError
+from sifi_streamer.sifi.devices import (
     Modalities,
     Modality,
     ModalitySpec,
     PacketReader,
     SiFiBandDevice,
     SiFiPacket,
-    SignalStreamSpec,
     modalities_from_device_info,
     packet_from_json_line,
     streams_from_modalities,
 )
-from sifi_streamer.exceptions import DeviceError
-from sifi_streamer.sensor_profile import (
+from sifi_streamer.sifi.sensor_profile import (
     ALL_SENSORS_PROFILE,
     SiFiSensorProfile,
     bridge_configuration_commands,

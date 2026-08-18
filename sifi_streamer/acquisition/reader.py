@@ -1,4 +1,4 @@
-"""Live shared-memory reader for one SiFi modality."""
+"""Live shared-memory reader for one acquisition stream."""
 
 from dataclasses import dataclass
 from multiprocessing.shared_memory import SharedMemory
@@ -7,7 +7,7 @@ from typing import Self
 import numpy as np
 import numpy.typing as npt
 
-from sifi_streamer.background.ring_buffer import SeqlockRingBuffer
+from sifi_streamer.acquisition.ring_buffer import SeqlockRingBuffer
 from sifi_streamer.exceptions import StaleDataError
 
 
@@ -24,7 +24,7 @@ class SignalWindow:
 
 
 class SharedMemoryReader:
-    """Read coherent recent windows from one worker-owned modality ring.
+    """Read coherent recent windows from one worker-owned stream ring.
 
     The reader attaches to, but does not unlink, an existing shared-memory block.
     Each successful read advances this reader's freshness counter.

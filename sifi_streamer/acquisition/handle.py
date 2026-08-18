@@ -8,20 +8,15 @@ from multiprocessing import Queue
 from pathlib import Path
 from typing import Self
 
-from sifi_streamer.background.process import background_main
-from sifi_streamer.capture import Attributes
-from sifi_streamer.client.reader import SharedMemoryReader
-from sifi_streamer.config import StreamerConfig
-from sifi_streamer.devices import DeviceFactory, Modalities, Modality
-from sifi_streamer.exceptions import AckError, AckTimeoutError, RecordingError
-from sifi_streamer.health import RawHealthSnapshot, WorkerFatal
-from sifi_streamer.protocol import (
+from sifi_streamer.acquisition.config import StreamerConfig
+from sifi_streamer.acquisition.devices import DeviceFactory
+from sifi_streamer.acquisition.health import RawHealthSnapshot, WorkerFatal
+from sifi_streamer.acquisition.ipc import (
     AddMarker,
     CaptureStarted,
     CaptureStopped,
     ErrorAck,
     MarkerAdded,
-    ModalityInfo,
     Ready,
     SegmentStarted,
     SegmentStopped,
@@ -32,6 +27,10 @@ from sifi_streamer.protocol import (
     StopSegment,
     StreamInfo,
 )
+from sifi_streamer.acquisition.reader import SharedMemoryReader
+from sifi_streamer.acquisition.worker.process import background_main
+from sifi_streamer.capture.records import Attributes
+from sifi_streamer.exceptions import AckError, AckTimeoutError, RecordingError
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +71,12 @@ class BackgroundHandle:
                 "ack_queue": self._ack_queue,
                 "health_queue": self._health_queue,
                 "fatal_queue": self._fatal_queue,
-                "shm_prefix": f"sifi_{uuid.uuid4().hex[:12]}",
+                "shm_prefix": f"acq_{uuid.uuid4().hex[:12]}",
                 "log_level": background_log_level,
             },
             daemon=True,
-            name="sifi-background",
+            name="acquisition-worker",
         )
-        self._readers: Modalities[SharedMemoryReader] = Modalities()
-        self._modalities: Modalities[ModalityInfo] = Modalities()
         self._stream_readers: dict[str, SharedMemoryReader] = {}
         self._streams: tuple[StreamInfo, ...] = ()
         self._device_info: dict[str, object] | None = None
@@ -110,22 +107,6 @@ class BackgroundHandle:
                     dtype=info.payload_dtype,
                 )
                 self._stream_readers[info.stream_id] = reader
-                try:
-                    modality = Modality(info.stream_id)
-                except ValueError:
-                    continue
-                self._readers = self._readers.with_value(modality, reader)
-                self._modalities = self._modalities.with_value(
-                    modality,
-                    ModalityInfo(
-                        info.shm_name,
-                        info.n_samples,
-                        info.n_channels,
-                        info.channels,
-                        round(info.nominal_rate_hz),
-                        info.payload_dtype,
-                    ),
-                )
             self._entered = True
             logger.info("Acquisition worker ready with %d stream(s)", len(ack.streams))
             return self
@@ -153,50 +134,17 @@ class BackgroundHandle:
             for reader in self._stream_readers.values():
                 reader.close()
             (
-                self._readers,
-                self._modalities,
                 self._stream_readers,
                 self._streams,
                 self._device_info,
                 self._entered,
             ) = (
-                Modalities(),
-                Modalities(),
                 {},
                 (),
                 None,
                 False,
             )
             logger.info("Acquisition worker and shared-memory readers closed")
-
-    @property
-    def reader(self) -> SharedMemoryReader:
-        """Return the compatibility EMG reader for the active handle.
-
-        Raises:
-            RuntimeError: If the handle is not entered or EMG is unavailable.
-        """
-        if self._readers.emg is None:
-            raise RuntimeError(
-                "EMG reader is available only inside the context manager"
-            )
-        return self._readers.emg
-
-    @property
-    def readers(self) -> Modalities[SharedMemoryReader]:
-        """Return readers for every enabled modality while the handle is entered."""
-        if not self._entered:
-            raise RuntimeError("readers are available only inside the context manager")
-        return self._readers
-
-    @property
-    def modalities(self) -> Modalities[ModalityInfo]:
-        """Return worker-published shared-memory layouts while entered."""
-        if not self._entered:
-            raise RuntimeError(
-                "modalities are available only inside the context manager"
-            )
-        return self._modalities
 
     @property
     def streams(self) -> tuple[StreamInfo, ...]:

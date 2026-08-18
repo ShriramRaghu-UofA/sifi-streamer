@@ -5,11 +5,7 @@ import logging
 import threading
 from collections.abc import Callable
 
-from sifi_streamer.devices import (
-    AcquisitionDevice,
-    AcquisitionPacket,
-    SiFiDevice,
-)
+from sifi_streamer.acquisition.devices import AcquisitionDevice, AcquisitionPacket
 from sifi_streamer.exceptions import DeviceError
 
 logger = logging.getLogger(__name__)
@@ -29,13 +25,13 @@ class AcquisitionThread(threading.Thread):
 
     def __init__(
         self,
-        device: AcquisitionDevice | SiFiDevice,
+        device: AcquisitionDevice,
         on_packet: Callable[[AcquisitionPacket], None],
         stop_event: threading.Event,
         *,
         already_connected: bool = False,
     ) -> None:
-        super().__init__(daemon=True, name="sifi-acquisition")
+        super().__init__(daemon=True, name="acquisition")
         self._device, self._on_packet, self._stop = device, on_packet, stop_event
         self._already_connected = already_connected
         self.failure: BaseException | None = None

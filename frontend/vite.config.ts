@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [tailwindcss(), svelte()],
   build: {
-    outDir: '../sifi_streamer/web_assets',
+    outDir: '../sifi_streamer/web/assets',
     emptyOutDir: false,
     rollupOptions: {
       output: {

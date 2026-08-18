@@ -6,18 +6,18 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-from sifi_streamer.annotation_kinds import AnnotationKindDefinition
-from sifi_streamer.bridge import BridgeTransport
-from sifi_streamer.health import HealthThresholds
-from sifi_streamer.runner import parse_attributes
-from sifi_streamer.sensor_cli import (
+from sifi_streamer.acquisition.health import HealthThresholds
+from sifi_streamer.capture.runners import parse_attributes
+from sifi_streamer.sifi.bridge import BridgeTransport
+from sifi_streamer.sifi.cli.sensor_options import (
     add_sensor_arguments,
     resolve_sensor_profile,
     sensor_options_used,
     sensor_profile_summary,
 )
-from sifi_streamer.sifi_backend import create_sifi_capture_runtime
-from sifi_streamer.web import _kind, serve_capture_web
+from sifi_streamer.sifi.composition import create_sifi_capture_runtime
+from sifi_streamer.web.annotations import AnnotationKindDefinition
+from sifi_streamer.web.coordinator import _kind, serve_capture_web
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -1,14 +1,14 @@
 import unittest
 from unittest.mock import patch
 
-from sifi_streamer.cli import build_parser
-from sifi_streamer.controller import CaptureController
-from sifi_streamer.runner import (
+from sifi_streamer.capture import (
+    CaptureController,
     interactive_annotations,
     parse_attributes,
     parse_scalar,
     run_until_interrupt,
 )
+from sifi_streamer.sifi.cli.capture import build_parser
 
 
 class Backend:

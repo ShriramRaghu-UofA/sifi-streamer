@@ -4,7 +4,7 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from sifi_streamer.sensor_profile import (
+from sifi_streamer.sifi.sensor_profile import (
     SENSOR_PRESETS,
     load_sensor_profile,
     write_sensor_profile,

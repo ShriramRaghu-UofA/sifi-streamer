@@ -5,7 +5,7 @@ No changes to either consumer repository were made in this extraction.
 Add the shared dependency to both repositories:
 
 ```powershell
-uv add "sifi-streamer @ git+ssh://git@github.com/BLINCdev/sifi-streamer.git@v0.1.0"
+uv add "sifi-streamer @ git+ssh://git@github.com/BLINCdev/sifi-streamer.git@v0.5.0"
 ```
 
 Equivalent metadata:
@@ -15,16 +15,17 @@ Equivalent metadata:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.1.0" }
+sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag = "v0.5.0" }
 ```
 
 ## cognitive-load-validation
 
 1. Add the dependency, then remove its local `sifi_streamer/` directory.
-2. Replace `cognitive_platform.recording` imports with package-root imports or
-   `sifi_streamer.controller`.
-3. Replace `cognitive_platform.sifi` imports with
-   `sifi_streamer.sifi_backend`.
+2. Replace `cognitive_platform.recording` imports with
+   `sifi_streamer.capture` imports.
+3. Replace `cognitive_platform.sifi` imports with `sifi_streamer.sifi` imports.
+   Generic injected-device and monitoring imports belong under
+   `sifi_streamer.acquisition`.
 4. Keep participant paths, manifests, task suites, task-specific runners, and
    Parquet policy in the cognitive repository. Its CLI becomes a thin wrapper
    around `create_sifi_capture` and the shared runner functions.
@@ -36,8 +37,11 @@ sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag =
 ## sifi-data-acquisition
 
 1. Add the dependency, then remove its local `sifi_streamer/` directory.
-2. Existing package-root device, bridge, capture, `BackgroundHandle`, and
-   `SharedMemoryReader` imports remain available.
+2. Migrate imports explicitly: records/controllers/runners come from
+   `sifi_streamer.capture`; device protocols, `BackgroundHandle`, shared-memory
+   readers, health, and monitoring come from `sifi_streamer.acquisition`; SiFi
+   devices, bridge support, profiles, and factories come from
+   `sifi_streamer.sifi`.
 3. Fix any positional marker calls relying on the old bug: arguments are
    consistently `marker_id, marker_kind`.
 4. Remove runtime dependencies no longer used by that consumer, then run its
@@ -46,11 +50,16 @@ sifi-streamer = { git = "ssh://git@github.com/BLINCdev/sifi-streamer.git", tag =
 Pin both consumers to the same immutable tag or commit, regenerate `uv.lock`,
 and verify a short synthetic capture before hardware testing.
 
-Consumers with non-SiFi acquisition devices may inject an `AcquisitionDevice`
-with fixed `SignalStreamSpec` declarations. Prefer dynamic `streams` and
-`stream_readers`; fixed `Modalities` remains a SiFi compatibility view. Web
-consumer launchers pass a runtime factory to `serve_capture_web` rather than
-moving lifecycle ownership into browser code.
+Consumers with non-SiFi acquisition devices inject a structural
+`AcquisitionDevice` with fixed `SignalStreamSpec` declarations. Live access uses
+`streams` and `stream_readers`; SiFi `Modalities` no longer appear on the
+generic handle. Web consumer launchers import from `sifi_streamer.web` and pass
+a runtime factory to `serve_capture_web` rather than moving lifecycle ownership
+into browser code.
+
+There are no forwarding modules or package-root compatibility exports. Treat
+this namespace migration as an intentional source-level break; capture schema
+version 2 and its wire compatibility are unchanged.
 
 ## Sensor configuration migration
 

@@ -5,19 +5,19 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-from sifi_streamer.bridge import BridgeTransport
-from sifi_streamer.runner import (
+from sifi_streamer.capture.runners import (
     parse_attributes,
     run_interactive_capture,
     run_timed_capture,
     run_until_interrupt,
 )
-from sifi_streamer.sensor_cli import (
+from sifi_streamer.sifi.bridge import BridgeTransport
+from sifi_streamer.sifi.cli.sensor_options import (
     add_sensor_arguments,
     resolve_sensor_profile,
     sensor_options_used,
 )
-from sifi_streamer.sifi_backend import create_sifi_capture
+from sifi_streamer.sifi.composition import create_sifi_capture
 
 
 def build_parser() -> argparse.ArgumentParser:

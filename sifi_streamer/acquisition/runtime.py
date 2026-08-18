@@ -2,17 +2,17 @@
 
 from dataclasses import dataclass
 
-from sifi_streamer.client.handle import BackgroundHandle
-from sifi_streamer.client.reader import SignalWindow
-from sifi_streamer.controller import CaptureController
-from sifi_streamer.health import (
+from sifi_streamer.acquisition.handle import BackgroundHandle
+from sifi_streamer.acquisition.health import (
     HealthEvaluator,
     HealthEvent,
     HealthSnapshot,
     HealthThresholds,
     WorkerFatal,
 )
-from sifi_streamer.protocol import StreamInfo
+from sifi_streamer.acquisition.ipc import StreamInfo
+from sifi_streamer.acquisition.reader import SignalWindow
+from sifi_streamer.capture.controller import CaptureController
 
 
 class AcquisitionMonitor:

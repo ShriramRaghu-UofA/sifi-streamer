@@ -9,25 +9,22 @@ import threading
 import time
 from multiprocessing import Queue
 from multiprocessing.shared_memory import SharedMemory
-from typing import cast
 
 import numpy as np
 
-from sifi_streamer.background.acquisition import AcquisitionThread
-from sifi_streamer.background.command_handler import CommandHandler
-from sifi_streamer.background.recorder import RecorderFSM
-from sifi_streamer.background.ring_buffer import SeqlockRingBuffer
-from sifi_streamer.config import StreamerConfig
-from sifi_streamer.devices import (
+from sifi_streamer.acquisition.config import StreamerConfig
+from sifi_streamer.acquisition.devices import (
     AcquisitionPacket,
     DeviceFactory,
-    SiFiDevice,
     SignalStreamSpec,
-    streams_from_modalities,
 )
+from sifi_streamer.acquisition.health import WorkerFatal, WorkerHealthCollector
+from sifi_streamer.acquisition.ipc import ErrorAck, Ready, StreamInfo
+from sifi_streamer.acquisition.ring_buffer import SeqlockRingBuffer
+from sifi_streamer.acquisition.worker.acquisition import AcquisitionThread
+from sifi_streamer.acquisition.worker.command_handler import CommandHandler
+from sifi_streamer.acquisition.worker.recorder import RecorderFSM
 from sifi_streamer.exceptions import DeviceError
-from sifi_streamer.health import WorkerFatal, WorkerHealthCollector
-from sifi_streamer.protocol import ErrorAck, Ready, StreamInfo
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +56,7 @@ def background_main(
         device_factory: Factory invoked in this process to create the device.
         cmd_queue: Commands from the foreground handle.
         ack_queue: Startup and command acknowledgements to the foreground.
-        shm_prefix: Unique prefix for per-modality shared-memory names.
+        shm_prefix: Unique prefix for per-stream shared-memory names.
         log_level: Worker root logging level.
     """
     logging.basicConfig(
@@ -71,12 +68,7 @@ def background_main(
     try:
         device = device_factory()
         device.connect()
-        streams_value = getattr(device, "streams", None)
-        streams: tuple[SignalStreamSpec, ...] = (
-            tuple(streams_value)
-            if streams_value is not None
-            else streams_from_modalities(cast(SiFiDevice, device).modalities)
-        )
+        streams: tuple[SignalStreamSpec, ...] = tuple(device.streams)
         if not streams or len({item.stream_id for item in streams}) != len(streams):
             raise ValueError("device streams must be non-empty and uniquely identified")
         logger.info(

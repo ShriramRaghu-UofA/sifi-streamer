@@ -5,19 +5,20 @@ from pathlib import Path
 
 import numpy as np
 
-from sifi_streamer.annotation_kinds import (
+from sifi_streamer.acquisition import (
+    HealthThresholds,
+    SignalChannelSpec,
+    SignalStreamSpec,
+    create_capture_runtime,
+)
+from sifi_streamer.capture import CaptureLogReader, SegmentStarted
+from sifi_streamer.sifi import create_sifi_capture_runtime
+from sifi_streamer.web import (
     AnnotationKindDefinition,
     AnnotationKindRegistry,
     AnnotationTarget,
+    WebCaptureCoordinator,
 )
-from sifi_streamer.capture import CaptureLogReader, SegmentStarted
-from sifi_streamer.devices import SignalChannelSpec, SignalStreamSpec
-from sifi_streamer.health import HealthThresholds
-from sifi_streamer.sifi_backend import (
-    create_capture_runtime,
-    create_sifi_capture_runtime,
-)
-from sifi_streamer.web import WebCaptureCoordinator
 
 
 class CustomPacket:

@@ -4,8 +4,7 @@ import logging
 import queue
 from multiprocessing import Queue
 
-from sifi_streamer.background.recorder import RecorderFSM
-from sifi_streamer.protocol import (
+from sifi_streamer.acquisition.ipc import (
     AddMarker,
     CaptureStarted,
     CaptureStopped,
@@ -20,6 +19,7 @@ from sifi_streamer.protocol import (
     StopCapture,
     StopSegment,
 )
+from sifi_streamer.acquisition.worker.recorder import RecorderFSM
 
 logger = logging.getLogger(__name__)
 

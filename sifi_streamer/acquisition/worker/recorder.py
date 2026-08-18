@@ -4,9 +4,9 @@ import logging
 import threading
 from pathlib import Path
 
-from sifi_streamer.capture import Attributes, CaptureLogWriter
-from sifi_streamer.config import StreamerConfig
-from sifi_streamer.devices import AcquisitionPacket
+from sifi_streamer.acquisition.config import StreamerConfig
+from sifi_streamer.acquisition.devices import AcquisitionPacket
+from sifi_streamer.capture.records import Attributes, CaptureLogWriter
 
 logger = logging.getLogger(__name__)
 

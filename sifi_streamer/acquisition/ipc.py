@@ -7,7 +7,7 @@ mappings are defensively copied by the sending API before a message is queued.
 from dataclasses import dataclass
 from pathlib import Path
 
-from sifi_streamer.capture import Attributes
+from sifi_streamer.capture.records import Attributes
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,31 +90,6 @@ type CommandMessage = (
 
 
 @dataclass(frozen=True, slots=True)
-class ModalityInfo:
-    """Shared-memory layout published for one enabled modality.
-
-    Attributes:
-        shm_name: Operating-system shared-memory block name.
-        n_samples: Ring-buffer capacity in samples.
-        n_channels: Number of columns in each sample.
-        channels: Ordered channel names corresponding to matrix columns.
-        sample_rate: Nominal samples per second.
-        payload_dtype: NumPy dtype string for stored values.
-    """
-
-    shm_name: str
-    n_samples: int
-    n_channels: int
-    channels: tuple[str, ...]
-    sample_rate: int
-    payload_dtype: str = "<f4"
-
-    def samples_for_seconds(self, seconds: float) -> int:
-        """Convert a duration to a rounded sample count, with a minimum of one."""
-        return max(round(seconds * self.sample_rate), 1)
-
-
-@dataclass(frozen=True, slots=True)
 class StreamInfo:
     """Shared-memory and display metadata for one generic live stream."""
 
@@ -141,7 +116,7 @@ class Ready:
     """Report successful worker startup and available live streams.
 
     Attributes:
-        modalities: Shared-memory layout for each enabled modality.
+        streams: Shared-memory layout for each declared stream.
         device_info: Optional vendor metadata reported during device connection.
     """
 

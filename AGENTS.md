@@ -10,11 +10,11 @@ records, acquisition lifecycle, or process ownership.
 This repository is the private reusable `sifi-streamer` distribution. It owns:
 
 - SiFi device and managed bridge integration;
-- background acquisition and SiFi-shaped shared memory;
+- pluggable background acquisition and generic stream-shaped shared memory;
 - authoritative append-only capture logging;
 - generic segments and markers;
 - the composition-oriented `CaptureController` and `CaptureBackend` protocol;
-- `SiFiCaptureBackend`;
+- the generic `AcquisitionCaptureBackend`;
 - reusable capture runners and interactive annotation parsing;
 - the standalone `sifi-capture` command;
 - the synthetic SiFi device.
@@ -28,7 +28,7 @@ explicitly expands the scope.
 Use composition, not inheritance, for application behavior:
 
 ```text
-CaptureController -> CaptureBackend protocol -> SiFiCaptureBackend
+CaptureController -> CaptureBackend protocol -> AcquisitionCaptureBackend
                                               -> BackgroundHandle
 ```
 
@@ -36,17 +36,20 @@ CaptureController -> CaptureBackend protocol -> SiFiCaptureBackend
   `CaptureBackend`.
 - Do not add device-specific controller subclasses, task controller
   subclasses, or inheritance hierarchies for application concepts.
-- `SiFiCaptureBackend` owns one entered `BackgroundHandle` and its capture. It
-  does not inherit from `CaptureController`.
+- `AcquisitionCaptureBackend` owns one entered `BackgroundHandle` and its
+  capture. It does not inherit from `CaptureController`.
+- Device integrations satisfy structural `AcquisitionDevice` and
+  `AcquisitionPacket` protocols without inheritance or registration. Keep
+  composition and dependency injection as the extension mechanism.
 - The capture log, annotations, controller, and runners should remain
   device-neutral where practical.
 - Live acquisition accepts injected `AcquisitionDevice` implementations with a
   fixed startup registry of string-keyed `SignalStreamSpec` values. Each packet
   contributes to at most one declared stream. Do not support streams appearing
   or disappearing after startup without another explicitly approved change.
-- Preserve `Modality`, `Modalities`, `SiFiPacket`, `SiFiDevice`, and bridge
-  transports as SiFi-specific compatibility conveniences over the generic
-  acquisition boundary. Do not add a meta-package or unrelated device registry.
+- Keep `Modality`, `Modalities`, `SiFiPacket`, and bridge transports contained
+  in `sifi_streamer.sifi`. The generic acquisition layer must not import the
+  SiFi or web namespaces. Do not add a meta-package or device registry.
 
 ## Generic capture vocabulary
 
@@ -131,7 +134,8 @@ cross-process boundaries. Never use mutable default arguments.
   `uv run sifi-download-bridge`. Never download or update a bridge during
   package installation, import, capture creation, or device startup.
 - Keep the maintainer-tested bridge version and all platform SHA-256 values in
-  `bridge_download.py`. Updating them is a deliberate manual maintainer action.
+  `sifi/bridge_install.py`. Updating them is a deliberate manual maintainer
+  action.
 - The optional latest-release and specific-tag paths must require a valid
   SHA-256 digest from GitHub release metadata and fail closed when it is absent
   or malformed. Tested mode routes through the tag resolver with the
@@ -198,8 +202,8 @@ running commands, and builds.
   `Any`, `object`, string flags, ad-hoc tuples, and unstructured dictionaries.
 - Use specific exceptions. Do not broadly swallow `Exception` except where a
   lifecycle boundary must clean up and immediately re-raise.
-- Keep functions small and semantic. Preserve useful package-root imports and
-  update `__all__` with intentional public API changes.
+- Keep functions small and semantic. Use the canonical `capture`,
+  `acquisition`, `sifi`, and `web` namespaces; keep the package root minimal.
 - Keep runtime dependencies minimal and development dependencies separate.
 - Ensure wheel configuration includes the complete `sifi_streamer` package and
   the `sifi-capture` console script.
@@ -252,7 +256,7 @@ uv build
 ```
 
 Frontend changes must include the regenerated, committed files under
-`sifi_streamer/web_assets`. Do not commit `frontend/node_modules`. A Git or
+`sifi_streamer/web/assets`. Do not commit `frontend/node_modules`. A Git or
 wheel installation consumes the compiled assets and must not require Node.js.
 
 Also install the built wheel into a clean temporary Python 3.14 environment and

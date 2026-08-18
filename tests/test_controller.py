@@ -1,9 +1,13 @@
 import unittest
 
-from sifi_streamer.capture import Attributes, Scalar
-from sifi_streamer.controller import CaptureController, NoCaptureController
+from sifi_streamer.capture import (
+    Attributes,
+    CaptureController,
+    NoCaptureController,
+    Scalar,
+    run_capture,
+)
 from sifi_streamer.exceptions import CaptureInitializationError
-from sifi_streamer.runner import run_capture
 
 type EventPayload = str | tuple[str, str] | tuple[str, str, dict[str, Scalar]] | None
 

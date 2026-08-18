@@ -12,24 +12,27 @@ from unittest.mock import patch
 
 import numpy as np
 
-from sifi_streamer import (
+from sifi_streamer.acquisition import (
     BackgroundHandle,
-    CaptureLogReader,
-    RawPacket,
+    SharedMemoryReader,
     StreamerConfig,
-    SyntheticSiFiDevice,
 )
-from sifi_streamer.background.ring_buffer import SeqlockRingBuffer
-from sifi_streamer.bridge import BridgeTransport, SiFiBridgeDevice, _UdpPacketReader
-from sifi_streamer.client.reader import SharedMemoryReader
-from sifi_streamer.devices import (
+from sifi_streamer.acquisition.ring_buffer import SeqlockRingBuffer
+from sifi_streamer.capture import CaptureLogReader, RawPacket
+from sifi_streamer.exceptions import DeviceError
+from sifi_streamer.sifi import SyntheticSiFiDevice
+from sifi_streamer.sifi.bridge import (
+    BridgeTransport,
+    SiFiBridgeDevice,
+    _UdpPacketReader,
+)
+from sifi_streamer.sifi.devices import (
     Modality,
     SiFiBandDevice,
     modalities_from_device_info,
     packet_from_json_line,
 )
-from sifi_streamer.exceptions import DeviceError
-from sifi_streamer.sensor_profile import ALL_SENSORS_PROFILE, EMG_ONLY_PROFILE
+from sifi_streamer.sifi.sensor_profile import ALL_SENSORS_PROFILE, EMG_ONLY_PROFILE
 
 PACKET = (
     '{"packet_type":"ecg","timestamps":[1.0],"data":{"ecg":[2.5]},"received_at":3.0}'
@@ -115,7 +118,7 @@ class DeviceTests(unittest.TestCase):
             with (
                 self.subTest(transport=transport),
                 patch(
-                    "sifi_streamer.bridge.subprocess.Popen",
+                    "sifi_streamer.sifi.bridge.subprocess.Popen",
                     return_value=(process := FakeProcess()),
                 ) as popen,
             ):
@@ -152,7 +155,7 @@ class DeviceTests(unittest.TestCase):
             ) as handle:
                 handle.start_capture(path, "synthetic")
                 time.sleep(0.03)
-                window = handle.reader.read_window(4)
+                window = handle.stream_readers[Modality.EMG].read_window(4)
                 assert window is not None
                 self.assertEqual(window.shape, (4, 8))
                 handle.stop_capture()

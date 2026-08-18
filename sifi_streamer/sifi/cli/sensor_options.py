@@ -4,8 +4,8 @@ import argparse
 from dataclasses import replace
 from pathlib import Path
 
-from sifi_streamer.capture import Scalar
-from sifi_streamer.sensor_profile import (
+from sifi_streamer.capture.records import Scalar
+from sifi_streamer.sifi.sensor_profile import (
     ECG_SAMPLE_RATES,
     EDA_SAMPLE_RATES,
     EMG_SAMPLE_RATES,

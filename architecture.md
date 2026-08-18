@@ -7,10 +7,18 @@ CaptureController -> CaptureBackend protocol -> AcquisitionCaptureBackend
                                                 |
                                          BackgroundHandle
                                                 |
-                    acquisition + shared memory + CaptureLogWriter
+                 generic worker + shared memory + CaptureLogWriter
                                                 |
-                           AcquisitionDevice / SiFiBridgeDevice
+                                      AcquisitionDevice protocol
+                                         /                \
+                                  MyoDevice          SiFiBridgeDevice
 ```
+
+The source tree makes those boundaries explicit: `capture` owns authoritative
+records and lifecycle, `acquisition` owns the pluggable device boundary and
+process machinery, `sifi` supplies one concrete integration, and `web` supplies
+a monitored launcher. Dependencies point from integrations toward the generic
+layers; `capture` and `acquisition` never import `sifi` or `web`.
 
 `CaptureController` knows only captures, segments, markers, IDs, kinds,
 reasons, and scalar attributes. It validates lifecycle, tracks arbitrary nested
@@ -19,10 +27,12 @@ does not know trials, presentations, participants, stimuli, responses, tasks,
 suites, or application artifact layouts. `NoCaptureController` provides the
 same generic surface for deliberate no-hardware operation.
 
-`CaptureBackend` is structural. `SiFiCaptureBackend` composes it with exactly
-one entered `BackgroundHandle`; it is not a controller subclass. The handle
-owns the spawned worker and shared-memory readers. The worker owns the device,
-ring buffers, and recorder. The recorder serializes packets and annotations.
+`CaptureBackend` is structural. `AcquisitionCaptureBackend` satisfies it by
+owning exactly one entered `BackgroundHandle`; it is not a controller subclass.
+The handle owns the spawned worker and shared-memory readers. The worker owns
+the injected device, ring buffers, and recorder. The recorder serializes
+packets and annotations. SiFi composition supplies a `SiFiBridgeDevice` factory
+to this same generic backend rather than defining a device-specific subclass.
 
 Live acquisition uses an ordered registry of string stream IDs declared once
 after an injected device connects. Each `SignalStreamSpec` fixes its channels,
@@ -31,9 +41,11 @@ at most one stream and may independently provide one raw capture document.
 Shared-memory rings retain timestamps, native values, explicit validity, and
 an absolute cursor.
 
-`Modality`, `Modalities`, `SiFiPacket`, and `SiFiDevice` remain supported SiFi
-compatibility projections. Stream addition or removal after startup remains
-out of scope because live layouts are fixed for a capture.
+`Modality`, `Modalities`, and `SiFiPacket` are contained in the `sifi`
+integration. Generic acquisition consumes only `AcquisitionDevice`,
+`AcquisitionPacket`, and fixed `SignalStreamSpec` declarations. Stream addition
+or removal after startup remains out of scope because live layouts are fixed
+for a capture.
 
 Managed SiFi startup consumes one complete immutable `SiFiSensorProfile`.
 It sends every ECG, EMG, EDA, PPG, IMU, and temperature option on every

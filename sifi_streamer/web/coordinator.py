@@ -15,15 +15,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from sifi_streamer.annotation_kinds import (
+from sifi_streamer.acquisition.health import HealthThresholds
+from sifi_streamer.acquisition.runtime import CaptureRuntime
+from sifi_streamer.capture.records import Attributes, Scalar, validate_attributes
+from sifi_streamer.web.annotations import (
     AnnotationKindDefinition,
     AnnotationKindRegistry,
     AnnotationTarget,
 )
-from sifi_streamer.capture import Attributes, Scalar, validate_attributes
-from sifi_streamer.health import HealthThresholds
-from sifi_streamer.health_log import HealthLogWriter, default_health_path
-from sifi_streamer.monitor import CaptureRuntime
+from sifi_streamer.web.health_log import HealthLogWriter, default_health_path
 
 type RuntimeFactory = Callable[[str, Attributes], CaptureRuntime]
 
@@ -371,7 +371,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path not in assets:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        resource = files("sifi_streamer.web_assets").joinpath(assets[path])
+        resource = files("sifi_streamer.web.assets").joinpath(assets[path])
         data = resource.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header(

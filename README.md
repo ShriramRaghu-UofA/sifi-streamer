@@ -2,9 +2,22 @@
 
 [![CI](https://github.com/BLINCdev/sifi-streamer/actions/workflows/main.yml/badge.svg)](https://github.com/BLINCdev/sifi-streamer/actions/workflows/main.yml)
 
-Private Python 3.14+ package for SiFi acquisition, shared-memory live signals,
-and append-only capture logs. The `sifi_streamer` namespace is preserved so
-existing consumers can replace their copied package with a dependency.
+Pluggable Python 3.14+ acquisition and capture infrastructure with a bundled
+SiFi integration. Inject any device that satisfies the structural acquisition
+protocols to reuse the background worker, shared-memory live signals, health
+monitoring, generic annotations, and authoritative append-only capture logs.
+Device implementations use composition and dependency injection; they do not
+inherit from package base classes.
+
+The package is organized by responsibility:
+
+- `sifi_streamer.capture`: device-neutral records, controllers, and runners;
+- `sifi_streamer.acquisition`: device protocols, worker process, shared memory,
+  monitoring, and the generic capture backend;
+- `sifi_streamer.sifi`: the bundled SiFi bridge, devices, profiles, and
+  composition helpers;
+- `sifi_streamer.web`: the optional local dashboard and its presentation
+  configuration.
 
 ## Installation
 
@@ -19,7 +32,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.4.1" }
+sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.5.0" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential
@@ -103,7 +116,9 @@ pinned by the maintainer.
 ```python
 from pathlib import Path
 
-from sifi_streamer import CaptureLogReader, EMG_IMU_PROFILE, create_sifi_capture
+from sifi_streamer.capture import CaptureLogReader
+from sifi_streamer.sifi import create_sifi_capture
+from sifi_streamer.sifi.sensor_profile import EMG_IMU_PROFILE
 
 capture = create_sifi_capture(
     Path("session.capture.jsonl.zst"),
@@ -136,7 +151,7 @@ non-finite floats are rejected.
 Consumer composition can define its own vocabulary:
 
 ```python
-from sifi_streamer import CaptureController
+from sifi_streamer.capture import CaptureController
 
 
 def run_trial(capture: CaptureController, trial_id: str) -> None:
@@ -148,6 +163,54 @@ def run_trial(capture: CaptureController, trial_id: str) -> None:
 ```
 
 The example's trial vocabulary belongs to the consumer, not this package.
+
+## Pluggable acquisition
+
+Custom hardware implements the structural `AcquisitionDevice` and
+`AcquisitionPacket` protocols by shape; explicit inheritance or registration is
+not required. A connected device declares one fixed ordered stream registry and
+each packet contributes samples to at most one declared stream while optionally
+providing its complete raw document for capture.
+
+```python
+from pathlib import Path
+
+from sifi_streamer.acquisition import SignalChannelSpec, SignalStreamSpec
+from sifi_streamer.acquisition.backend import create_capture_runtime
+
+
+class MyoDevice:
+    @property
+    def streams(self) -> tuple[SignalStreamSpec, ...]:
+        return (
+            SignalStreamSpec(
+                "emg",
+                tuple(SignalChannelSpec(f"emg{i}") for i in range(8)),
+                200.0,
+            ),
+        )
+
+    def connect(self) -> None: ...
+
+    def disconnect(self) -> None: ...
+
+    def read_packet(self) -> "MyoPacket": ...
+
+    @property
+    def device_info(self) -> dict[str, object] | None: ...
+
+
+runtime = create_capture_runtime(
+    Path("myo.capture.jsonl.zst"),
+    "myo-session-001",
+    MyoDevice,  # top-level, zero-argument, and picklable for the worker process
+)
+```
+
+`MyoPacket` supplies `stream_id`, `timestamps`, channel `data`, health fields,
+and `capture_document()`. See [api.md](api.md) for the complete protocol shape.
+The included SiFi support uses this same boundary; it is an integration rather
+than a privileged acquisition path.
 
 ## CLI capture
 
@@ -221,7 +284,7 @@ reported without logging raw packets or routine dashboard polling.
 The dashboard requires its per-launch URL token and bundles Svelte, daisyUI,
 and uPlot assets in the wheel for offline use. Installing from a wheel or Git
 does not require Node.js because the compiled dashboard assets are committed
-under `sifi_streamer/web_assets`. Node.js is needed only to change and rebuild
+under `sifi_streamer/web/assets`. Node.js is needed only to change and rebuild
 the frontend.
 
 ## Synthetic capture
@@ -230,12 +293,11 @@ the frontend.
 sifi-capture synthetic.capture.jsonl.zst --capture-id dev --synthetic --duration 1
 ```
 
-For live access, enter a `BackgroundHandle` and read `handle.reader` (EMG) or
-the typed `handle.readers` compatibility collection. Generic injected devices
-declare fixed `SignalStreamSpec` values and use `handle.streams` and
-`handle.stream_readers`. Gap-aware incremental reads return source timestamps,
-native values, and an explicit validity mask. `SyntheticSiFiDevice` uses the
-same background and shared-memory path as hardware.
+For live access, enter a `BackgroundHandle`, inspect `handle.streams`, and read
+the corresponding entries in `handle.stream_readers`. Gap-aware incremental
+reads return source timestamps, native values, and an explicit validity mask.
+`SyntheticSiFiDevice` uses the same generic worker and shared-memory path as
+hardware and custom injected devices.
 
 The `.capture.jsonl.zst` file is authoritative, append-only schema-v2 JSONL in
 concatenated Zstandard frames. New files use exclusive creation and are never

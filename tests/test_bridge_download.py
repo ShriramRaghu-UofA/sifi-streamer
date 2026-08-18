@@ -9,7 +9,7 @@ from pathlib import Path
 from types import TracebackType
 from unittest.mock import patch
 
-from sifi_streamer.bridge_download import (
+from sifi_streamer.sifi.bridge_install import (
     MANIFEST_NAME,
     TESTED_VERSION,
     BridgeAsset,
@@ -67,7 +67,7 @@ class BridgeDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "bridge.zip"
             with patch(
-                "sifi_streamer.bridge_download.urlopen",
+                "sifi_streamer.sifi.bridge_install.urlopen",
                 return_value=Response(payload),
             ) as open_url:
                 digest = _download(asset, destination)
@@ -114,7 +114,9 @@ class BridgeDownloadTests(unittest.TestCase):
                 },
             ],
         }
-        with patch("sifi_streamer.bridge_download._read_json", return_value=release):
+        with patch(
+            "sifi_streamer.sifi.bridge_install._read_json", return_value=release
+        ):
             asset = latest_asset(suffix="x86_64-pc-windows-msvc.zip")
         self.assertEqual(asset.version, "2.1.0")
         self.assertEqual(asset.sha256, "a" * 64)
@@ -132,7 +134,7 @@ class BridgeDownloadTests(unittest.TestCase):
         }
         with (
             patch(
-                "sifi_streamer.bridge_download._read_json",
+                "sifi_streamer.sifi.bridge_install._read_json",
                 return_value=release_without_digest,
             ),
             self.assertRaisesRegex(BridgeDownloadError, "no valid SHA-256"),
@@ -151,7 +153,7 @@ class BridgeDownloadTests(unittest.TestCase):
             ],
         }
         with patch(
-            "sifi_streamer.bridge_download._read_json", return_value=release
+            "sifi_streamer.sifi.bridge_install._read_json", return_value=release
         ) as read_json:
             asset = tagged_asset("2.0.0-b20", suffix="x86_64-pc-windows-msvc.zip")
         self.assertTrue(read_json.call_args.args[0].endswith("/2.0.0-b20"))
@@ -161,7 +163,7 @@ class BridgeDownloadTests(unittest.TestCase):
 
         release["tag_name"] = "unexpected"
         with (
-            patch("sifi_streamer.bridge_download._read_json", return_value=release),
+            patch("sifi_streamer.sifi.bridge_install._read_json", return_value=release),
             self.assertRaisesRegex(BridgeDownloadError, "GitHub returned"),
         ):
             tagged_asset("2.0.0-b20", suffix="x86_64-pc-windows-msvc.zip")
@@ -189,9 +191,13 @@ class BridgeDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "chosen-location"
             with (
-                patch("sifi_streamer.bridge_download.tested_asset", return_value=asset),
                 patch(
-                    "sifi_streamer.bridge_download._download", side_effect=fake_download
+                    "sifi_streamer.sifi.bridge_install.tested_asset",
+                    return_value=asset,
+                ),
+                patch(
+                    "sifi_streamer.sifi.bridge_install._download",
+                    side_effect=fake_download,
                 ),
             ):
                 executable, manifest_path = install_bridge(output)
@@ -203,7 +209,10 @@ class BridgeDownloadTests(unittest.TestCase):
             self.assertEqual(manifest["executable"], "sifibridge.exe")
             self.assertEqual(manifest_path.name, MANIFEST_NAME)
             with (
-                patch("sifi_streamer.bridge_download.tested_asset", return_value=asset),
+                patch(
+                    "sifi_streamer.sifi.bridge_install.tested_asset",
+                    return_value=asset,
+                ),
                 self.assertRaisesRegex(BridgeDownloadError, "Refusing to overwrite"),
             ):
                 install_bridge(output)
@@ -225,9 +234,13 @@ class BridgeDownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             with (
-                patch("sifi_streamer.bridge_download.latest_asset", return_value=asset),
                 patch(
-                    "sifi_streamer.bridge_download._download", side_effect=fake_download
+                    "sifi_streamer.sifi.bridge_install.latest_asset",
+                    return_value=asset,
+                ),
+                patch(
+                    "sifi_streamer.sifi.bridge_install._download",
+                    side_effect=fake_download,
                 ),
                 self.assertRaisesRegex(BridgeDownloadError, "SHA-256 mismatch"),
             ):

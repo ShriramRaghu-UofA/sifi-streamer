@@ -5,8 +5,8 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
-from sifi_streamer.capture import Scalar
-from sifi_streamer.controller import CaptureController
+from sifi_streamer.capture.controller import CaptureController
+from sifi_streamer.capture.records import Scalar
 
 INTERACTIVE_HELP = """Commands:
   segment start ID KIND [key=value ...]

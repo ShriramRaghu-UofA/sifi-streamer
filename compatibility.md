@@ -13,7 +13,8 @@ it contained deliberate fixes:
 - the complete all-sensors profile defaults SiFiBand EMG to 1600 Hz and PPG to
   200 SPS with averaging 4 for a 50 Hz effective output rate;
 - oversized packet writes retain the newest samples in a ring;
-- modern annotations and useful package-root exports are retained.
+- modern annotations are retained under the explicit `capture`, `acquisition`,
+  `sifi`, and `web` namespaces.
 
 The capture format remains schema version 2 with unchanged record names and
 field meanings. Existing raw packet documents remain intact. Readers accept
@@ -32,12 +33,13 @@ scalar-annotation contract. When available, the complete startup device-info
 document is instead written as the first schema-v2 `raw_packet`; live
 `BackgroundHandle.device_info` also remains available.
 
-Live acquisition now also accepts generic injected `AcquisitionDevice`
-implementations with fixed startup stream registries. Existing SiFi-facing
-`Modality`, `Modalities`, `ModalitySpec`, `SiFiPacket`, `BackgroundHandle.reader`,
-`readers`, and `modalities` remain available. New integrations should use
-`SignalStreamSpec`, `streams`, and `stream_readers`. Shared memory is a runtime
-boundary rather than a persisted wire format.
+Live acquisition accepts generic injected `AcquisitionDevice` implementations
+with fixed startup stream registries. SiFi-facing `Modality`, `Modalities`,
+`ModalitySpec`, and `SiFiPacket` live under `sifi_streamer.sifi`; generic live
+access uses `SignalStreamSpec`, `BackgroundHandle.streams`, and
+`stream_readers`. Shared memory is a runtime boundary rather than a persisted
+wire format. Python import compatibility with the two former internal copies is
+not retained; capture-wire compatibility remains unchanged.
 
 Health sidecars and web annotation-kind definitions do not add records to or
 change the meaning of schema-v2 captures.

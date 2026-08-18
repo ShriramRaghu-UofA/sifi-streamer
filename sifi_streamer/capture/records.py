@@ -1,4 +1,4 @@
-"""Read and write authoritative SiFi capture logs.
+"""Read and write authoritative device-neutral capture logs.
 
 Capture files contain newline-terminated schema-version-2 JSON records in one
 or more concatenated Zstandard frames.  Writers create files exclusively and

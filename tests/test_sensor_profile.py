@@ -4,10 +4,14 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from sifi_streamer.bridge import BridgeTransport, SiFiBridgeDevice
-from sifi_streamer.cli import build_parser
-from sifi_streamer.sensor_cli import resolve_sensor_profile, sensor_profile_summary
-from sifi_streamer.sensor_profile import (
+from sifi_streamer.sifi import create_sifi_capture
+from sifi_streamer.sifi.bridge import BridgeTransport, SiFiBridgeDevice
+from sifi_streamer.sifi.cli.capture import build_parser
+from sifi_streamer.sifi.cli.sensor_options import (
+    resolve_sensor_profile,
+    sensor_profile_summary,
+)
+from sifi_streamer.sifi.sensor_profile import (
     ALL_SENSORS_PROFILE,
     EMG_IMU_PROFILE,
     EMG_ONLY_PROFILE,
@@ -18,8 +22,7 @@ from sifi_streamer.sensor_profile import (
     sensor_profile_to_dict,
     write_sensor_profile,
 )
-from sifi_streamer.sifi_backend import create_sifi_capture
-from sifi_streamer.web_cli import main as web_main
+from sifi_streamer.web.cli import main as web_main
 
 ALL_SENSOR_INFO = {
     "info": {
@@ -174,7 +177,7 @@ class SensorProfileTests(unittest.TestCase):
         self.assertEqual(summary["temperature_fs_hz"], 1)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "web.capture.jsonl.zst"
-            with patch("sifi_streamer.web_cli.serve_capture_web") as serve:
+            with patch("sifi_streamer.web.cli.serve_capture_web") as serve:
                 self.assertEqual(
                     web_main(
                         [

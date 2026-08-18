@@ -9,7 +9,7 @@ class StreamerConfig:
     """Immutable settings shared by foreground and acquisition processes.
 
     Attributes:
-        ring_buffer_seconds: Per-modality shared-memory history duration.
+        ring_buffer_seconds: Per-stream shared-memory history duration.
         ack_timeout_s: Default foreground wait for worker acknowledgements.
         capture_log_enabled: Whether the worker permits authoritative recording.
         capture_frame_target_bytes: Uncompressed bytes buffered per target frame.

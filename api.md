@@ -1,9 +1,9 @@
 # Python API reference
 
-The public API is exported from `sifi_streamer`. It separates device-neutral
-capture concepts from SiFi-specific acquisition. Application code normally uses
-`create_sifi_capture`, `CaptureController`, and `CaptureLogReader`; lower layers
-are available for custom launchers and integrations.
+The package root is intentionally minimal. Public APIs are grouped into
+`sifi_streamer.capture`, `sifi_streamer.acquisition`, `sifi_streamer.sifi`, and
+`sifi_streamer.web`. This keeps device-neutral capture and acquisition usable
+without importing the bundled SiFi or dashboard integrations.
 
 ## Capture vocabulary and annotations
 
@@ -112,9 +112,10 @@ segments.
 
 `create_sifi_capture(capture_file, capture_id, attributes=None, *,
 bridge_executable=..., host="127.0.0.1", port=5000, transport="tcp",
-sensor_profile=None, synthetic=False, config=None)` returns an unstarted generic
-controller composed with `SiFiCaptureBackend`. No process, device, or file is
-created until `start()`.
+sensor_profile=None, synthetic=False, config=None)` from `sifi_streamer.sifi`
+returns an unstarted generic controller composed with an
+`AcquisitionCaptureBackend`. No process, device, or file is created until
+`start()`.
 
 Hardware capture requires a preinstalled bridge. `sensor_profile` accepts a
 complete immutable `SiFiSensorProfile`; omission selects `ALL_SENSORS_PROFILE`.
@@ -133,9 +134,10 @@ with `load_sensor_profile()` and `write_sensor_profile()`. With
 `synthetic=True`, the same background, shared-memory, and recording path runs
 without the bridge, and hardware profiles are rejected.
 
-`SiFiCaptureBackend` is the concrete composition adapter. It owns exactly one
-entered `BackgroundHandle` and the capture started on that handle, including
-cleanup of partially entered handles.
+`AcquisitionCaptureBackend` is the sole acquisition-to-capture adapter. It owns
+exactly one entered `BackgroundHandle` and its capture, including cleanup of a
+partially entered handle. SiFi composition injects a `SiFiBridgeDevice` factory;
+it does not define a backend subclass or alias.
 
 ## Live acquisition
 
@@ -182,10 +184,9 @@ line, returning `None` for malformed/non-object JSON.
 `None`. `capture_document()` returns the original complete JSON object when one
 was parsed, preserving unknown device fields.
 
-`SiFiDevice` is the runtime-checkable acquisition protocol. Implementations
-provide `connect`, `disconnect`, `read_packet`, `modalities`, and `device_info`.
-`DeviceFactory` is a zero-argument callable returning such a device.
-`PacketReader` is the narrower bridge transport protocol.
+SiFi device classes satisfy the generic `AcquisitionDevice` protocol through
+their `streams` property. `PacketReader` is a narrower structural protocol used
+only by bridge transports.
 
 `SiFiBandDevice(host="127.0.0.1", port=5000)` reads newline-delimited packets from
 an already-running TCP endpoint and assumes default modality layouts.
@@ -206,9 +207,9 @@ not exit, and closes stdin, stdout, and stderr.
 
 `BackgroundHandle(config, device_factory)` is the foreground context manager for
 one spawned acquisition worker. Entering waits for readiness and attaches
-`SharedMemoryReader` objects. The compatibility `reader` property returns EMG;
-`readers` and `modalities` provide per-modality collections. `device_info`
-returns optional startup metadata.
+`SharedMemoryReader` objects. `streams` exposes the fixed worker-published
+registry, `stream_readers` maps stream IDs to readers, and `device_info` returns
+optional startup metadata.
 
 The annotation methods `start_capture`, `stop_capture`, `start_segment`,
 `stop_segment`, and `add_marker` send typed commands and wait for matching worker
@@ -226,9 +227,7 @@ attachment; the worker owns unlinking.
 `read_signal_window(n_samples)` and `read_since(cursor, *, max_samples=None)`
 return `SignalWindow(start_index, end_index, timestamps, samples, validity,
 overrun)`. Validity is independent of payload dtype, so integer and floating
-streams represent missing values identically. `BackgroundHandle.streams` and
-`stream_readers` expose arbitrary injected streams; existing modality
-properties remain SiFi compatibility views.
+streams represent missing values identically.
 
 ### Health and web capture
 
@@ -237,9 +236,11 @@ warnings. `AcquisitionMonitor.latest()` returns immutable evaluated snapshots;
 `events` retains warning/recovery transitions, `fatal()` reports reliable
 worker failure, and `read_since()` supplies live signal batches.
 
-`AnnotationKindDefinition` provides separate marker or segment shortcuts with
-display metadata, ID prefix/separator/padding/start, and default scalar
-attributes. `AnnotationKindRegistry` generates collision-free IDs in Python.
+`sifi_streamer.web.AnnotationKindDefinition` provides separate marker or
+segment shortcuts with display metadata, ID prefix/separator/padding/start, and
+default scalar attributes. Its `label` and `color` are dashboard presentation;
+the definition is not an authoritative capture record.
+`AnnotationKindRegistry` generates collision-free IDs in Python.
 
 `serve_capture_web(output, runtime_factory, ...)` owns one controller behind a
 loopback-only dashboard. Downstream launchers retain dependency injection by
@@ -306,11 +307,12 @@ installation failures.
 
 ## Worker protocol messages
 
-Advanced integrations may use the exported frozen command messages
+Advanced integrations may use frozen messages from
+`sifi_streamer.acquisition.ipc`:
 `StartCapture`, `StopCapture`, `StartSegment`, `StopSegment`, `AddMarker`, and
 `Shutdown`, represented by `CommandMessage`. Acknowledgements are `Ready`,
 `CaptureStarted`, `CaptureStopped`, `SegmentStarted`, `SegmentStopped`,
-`MarkerAdded`, and `ErrorAck`, represented by `AckMessage`. `ModalityInfo`
+`MarkerAdded`, and `ErrorAck`, represented by `AckMessage`. `StreamInfo`
 describes one shared-memory stream and converts seconds to sample counts with
 `samples_for_seconds`.
 

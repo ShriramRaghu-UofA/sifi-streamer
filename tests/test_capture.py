@@ -4,7 +4,8 @@ import unittest
 from compression import zstd
 from pathlib import Path
 
-from sifi_streamer.background.recorder import RecorderFSM
+from sifi_streamer.acquisition.config import StreamerConfig
+from sifi_streamer.acquisition.worker.recorder import RecorderFSM
 from sifi_streamer.capture import (
     CaptureDecodeError,
     CaptureLifecycleError,
@@ -20,7 +21,6 @@ from sifi_streamer.capture import (
     encode_record,
     validate_attributes,
 )
-from sifi_streamer.config import StreamerConfig
 
 
 class CaptureTests(unittest.TestCase):
