@@ -32,7 +32,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.1" }
+sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.2" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential

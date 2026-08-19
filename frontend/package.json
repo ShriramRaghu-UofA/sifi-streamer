@@ -7,16 +7,17 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "@sveltejs/vite-plugin-svelte": "latest",
-    "svelte": "latest",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "svelte": "^5.56.9",
     "uplot": "^1.6.32",
-    "vite": "latest"
+    "vite": "^8.2.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "daisyui": "^5.7.17",
-    "svelte-check": "latest",
+    "daisyui": "^5.7.18",
+    "svelte-check": "^4.7.6",
     "tailwindcss": "^4.3.3",
-    "typescript": "latest"
+    "typescript": "^6.0.3",
+    "vite": "^8.2.1"
   }
 }
