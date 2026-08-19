@@ -14,7 +14,7 @@ The package is organized by responsibility:
 - `sifi_streamer.capture`: device-neutral records, controllers, and runners;
 - `sifi_streamer.acquisition`: device protocols, worker process, shared memory,
   monitoring, and the generic capture backend;
-- `sifi_streamer.sifi`: the bundled SiFi bridge, devices, profiles, and
+- `sifi_streamer.sifi`: SiFi Bridge integration, devices, profiles, and
   composition helpers;
 - `sifi_streamer.web`: the optional local dashboard and its presentation
   configuration.
@@ -32,12 +32,19 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/ShriramRaghu-UofA/sifi-streamer.git", tag = "v0.6.3" }
+sifi-streamer = { git = "https://github.com/ShriramRaghu-UofA/sifi-streamer.git", tag = "v0.6.4" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential
 manager or a GitHub personal access token. Use an immutable tag or commit in
 production.
+
+## License
+
+The code in this repository is licensed under the [MIT License](LICENSE).
+SiFi Bridge is a separate proprietary binary supplied by SiFi Labs Inc. It is
+not included in this repository and is not covered by the MIT License. See the
+vendor terms below before downloading or using it.
 
 ## Bridge download
 
@@ -45,10 +52,11 @@ production.
 
 This project uses [SiFi Bridge](https://github.com/SiFiLabs/sifi-bridge-pub),
 proprietary vendor software provided by **SiFi Labs Inc.** SiFi Bridge is free
-to use but is not open-source software, and this project's license does not
-apply to it. Software built on it should credit it as "SiFi Bridge (SiFi Labs
-Inc.)." The tested bridge release is pinned below because the bridge is still
-in beta and later releases may introduce incompatible changes.
+to use but is not open-source software. It is distributed separately and is
+not covered by this repository's MIT License. Software built on it should
+credit it as "SiFi Bridge (SiFi Labs Inc.)." The tested bridge release is
+pinned below because the bridge is still in beta and later releases may
+introduce incompatible changes.
 
 SiFi Labs Inc. grants permission to download, install, and run the SiFi Bridge
 CLI, including in academic, commercial, and publicly demonstrated projects,

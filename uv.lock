@@ -148,7 +148,7 @@ wheels = [
 
 [[package]]
 name = "sifi-streamer"
-version = "0.6.3"
+version = "0.6.4"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
