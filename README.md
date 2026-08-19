@@ -1,6 +1,6 @@
 # sifi-streamer
 
-[![CI](https://github.com/BLINCdev/sifi-streamer/actions/workflows/main.yml/badge.svg)](https://github.com/BLINCdev/sifi-streamer/actions/workflows/main.yml)
+[![CI](https://github.com/ShriramRaghu-UofA/sifi-streamer/actions/workflows/main.yml/badge.svg)](https://github.com/ShriramRaghu-UofA/sifi-streamer/actions/workflows/main.yml)
 
 Pluggable Python 3.14+ acquisition and capture infrastructure with a bundled
 SiFi integration. Inject any device that satisfies the structural acquisition
@@ -32,7 +32,7 @@ From the private Git repository:
 dependencies = ["sifi-streamer"]
 
 [tool.uv.sources]
-sifi-streamer = { git = "https://github.com/BLINCdev/sifi-streamer.git", tag = "v0.6.2" }
+sifi-streamer = { git = "https://github.com/ShriramRaghu-UofA/sifi-streamer.git", tag = "v0.6.3" }
 ```
 
 For this private repository, authenticate HTTPS access through Git's credential
@@ -331,5 +331,4 @@ recorded clock domains but does not interpret application-defined kinds or
 filter incomplete/superseded attempts. Conversion is not authoritative.
 
 See the [Python API reference](api.md), [architecture.md](architecture.md),
-[migration.md](migration.md), [compatibility.md](compatibility.md), and
-[contribution guide](CONTRIBUTING.md).
+[compatibility.md](compatibility.md), and [contribution guide](CONTRIBUTING.md).

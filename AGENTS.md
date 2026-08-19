@@ -274,7 +274,7 @@ confirm:
 
 Update documentation whenever public concepts, commands, dependencies,
 capture compatibility, lifecycle, or ownership changes. Keep private Git
-dependency examples pointed at `BLINCdev/sifi-streamer` and recommend immutable
+dependency examples pointed at `ShriramRaghu-UofA/sifi-streamer` and recommend immutable
 tags or commits.
 
 When handing off consumer migration, call out deliberate API changes:

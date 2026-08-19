@@ -1,6 +1,6 @@
 [project]
 name = "sifi-streamer"
-version = "0.6.2"
+version = "0.6.3"
 description = "Reusable SiFi acquisition, live streaming, and authoritative capture logging"
 readme = "README.md"
 requires-python = ">=3.14"
