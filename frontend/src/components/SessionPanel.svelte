@@ -11,8 +11,8 @@
   let editable = $derived(dashboard.phase === 'setup');
 </script>
 
-<div class="grid gap-6 lg:grid-cols-2">
-  <section class="panel space-y-6">
+<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+  <section class="panel min-w-0 space-y-6">
     <div>
       <p class="eyebrow">01 / Session</p>
       <h2 class="h3 mt-2">{editable ? 'Prepare your capture' : 'Capture details'}</h2>
@@ -59,7 +59,7 @@
       </div>
     </div>
   </section>
-  <section class="panel space-y-5">
+  <section class="panel min-w-0 space-y-5">
     <div>
       <p class="eyebrow">02 / Device</p>
       <h2 class="h3 mt-2">Acquisition configuration</h2>

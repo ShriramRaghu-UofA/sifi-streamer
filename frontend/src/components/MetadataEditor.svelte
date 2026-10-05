@@ -61,7 +61,7 @@
   }
 </script>
 
-<fieldset class="space-y-3" {disabled}>
+<fieldset class="min-w-0 space-y-3" {disabled}>
   <legend class="mb-2 text-sm font-medium">{label}</legend>
   {#if !rows.length}<p class="field-hint">
       No extra fields. Add searchable facts such as operator or condition.
