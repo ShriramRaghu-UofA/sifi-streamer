@@ -48,11 +48,16 @@ or removal after startup remains out of scope because live layouts are fixed
 for a capture.
 
 Managed SiFi startup consumes one complete immutable `SiFiSensorProfile`.
-It sends every ECG, EMG, EDA, PPG, IMU, and temperature option on every
+It checks the bridge's physical sensor report and sends every ECG, EMG, EDA,
+PPG, IMU, and temperature option for physically present sensors on every
 connection—even for disabled sensors—then sends the complete sensor enabled
-state last. The subsequent bridge `info` response must agree with enabled
-states and rates before the fixed stream registry is published. PPG declares
+state last. Each command is acknowledged. The subsequent bridge `info` response
+must agree with enabled states and rates both before and after start, before the
+fixed stream registry is published. PPG declares
 raw `sps` and averaging separately; its stream rate is `sps / avg`.
+Fractional nominal rates are retained. TCP subscribers connect before start.
+Live metadata requires `info.configuration`; historical capture metadata may
+also use the old `info.device` configuration block.
 
 The authoritative artifact is an append-only `*.capture.jsonl.zst`.
 `CaptureLogWriter` exclusively creates schema-v2 JSONL in concatenated

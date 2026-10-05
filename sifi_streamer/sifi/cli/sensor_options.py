@@ -147,6 +147,5 @@ def sensor_profile_summary(profile: SiFiSensorProfile) -> dict[str, Scalar]:
         "imu_enabled": profile.imu.enabled,
         "imu_fs_hz": profile.imu.sample_rate_hz,
         "imu_accelerometer_range_g": profile.imu.accelerometer_range_g,
-        "imu_gyroscope_range_dps": profile.imu.gyroscope_range_dps,
         "temperature_fs_hz": profile.temperature.sample_rate_hz,
     }

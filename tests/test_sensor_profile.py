@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi import create_sifi_capture
 from sifi_streamer.sifi.bridge import BridgeTransport, SiFiBridgeDevice
 from sifi_streamer.sifi.cli.capture import build_parser
@@ -15,6 +16,7 @@ from sifi_streamer.sifi.sensor_profile import (
     ALL_SENSORS_PROFILE,
     EMG_IMU_PROFILE,
     EMG_ONLY_PROFILE,
+    ImuConfiguration,
     PpgConfiguration,
     bridge_configuration_commands,
     load_sensor_profile,
@@ -24,16 +26,21 @@ from sifi_streamer.sifi.sensor_profile import (
 )
 from sifi_streamer.web.cli import main as web_main
 
+ALL_SENSOR_CONFIGURATION = {
+    "ecg": {"enabled": True, "fs": 500},
+    "emg": {"enabled": True, "fs": 1600},
+    "eda": {"enabled": True, "fs": 50},
+    "imu": {"enabled": True, "fs": 100},
+    "ppg": {"enabled": True, "sps": 200, "avg": 4},
+    "temperature": {"enabled": True, "fs": 1},
+}
 ALL_SENSOR_INFO = {
     "info": {
-        "device": {
-            "ecg": {"enabled": True, "fs": 500},
-            "emg": {"enabled": True, "fs": 1600},
-            "eda": {"enabled": True, "fs": 50},
-            "imu": {"enabled": True, "fs": 100},
-            "ppg": {"enabled": True, "sps": 200, "avg": 4},
-            "temperature": {"enabled": True, "fs": 1},
-        }
+        "device": "SiFiBand",
+        "sensors": dict.fromkeys(
+            ("ecg", "emg", "eda", "imu", "ppg", "temperature"), True
+        ),
+        "configuration": ALL_SENSOR_CONFIGURATION,
     }
 }
 
@@ -76,6 +83,7 @@ class SensorProfileTests(unittest.TestCase):
             patch("pathlib.Path.exists", return_value=True),
             patch.object(device, "_launch"),
             patch.object(device, "_send", side_effect=sent.append),
+            patch.object(device, "_wait_for_response"),
             patch.object(device, "_wait_for_info", return_value=ALL_SENSOR_INFO),
         ):
             device.connect()
@@ -83,9 +91,11 @@ class SensorProfileTests(unittest.TestCase):
             sent,
             [
                 "connect",
+                "info",
                 *bridge_configuration_commands(ALL_SENSORS_PROFILE),
                 "info",
                 "start",
+                "info",
             ],
         )
 
@@ -93,16 +103,18 @@ class SensorProfileTests(unittest.TestCase):
         device = SiFiBridgeDevice(transport=BridgeTransport.STDOUT)
         bad_info = {
             "info": {
-                "device": {
-                    **ALL_SENSOR_INFO["info"]["device"],
+                **ALL_SENSOR_INFO["info"],
+                "configuration": {
+                    **ALL_SENSOR_CONFIGURATION,
                     "emg": {"enabled": True, "fs": 1000},
-                }
+                },
             }
         }
         with (
             patch("pathlib.Path.exists", return_value=True),
             patch.object(device, "_launch"),
             patch.object(device, "_send"),
+            patch.object(device, "_wait_for_response"),
             patch.object(device, "_wait_for_info", return_value=bad_info),
             self.assertRaisesRegex(Exception, "expected 1600 Hz"),
         ):
@@ -118,6 +130,97 @@ class SensorProfileTests(unittest.TestCase):
                 write_sensor_profile(path, ALL_SENSORS_PROFILE)
             write_sensor_profile(path, ALL_SENSORS_PROFILE, overwrite=True)
             self.assertEqual(load_sensor_profile(path), ALL_SENSORS_PROFILE)
+
+    def test_profile_v2_removes_unsupported_imu_settings(self) -> None:
+        document = sensor_profile_to_dict(ALL_SENSORS_PROFILE)
+        self.assertEqual(document["version"], 2)
+        imu = document["imu"]
+        assert isinstance(imu, dict)
+        self.assertNotIn("gyroscope_range_dps", imu)
+        self.assertEqual(
+            bridge_configuration_commands(ALL_SENSORS_PROFILE)[4],
+            "configure imu --fs 100 --acc-range 16",
+        )
+        for value in (2, 4):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ImuConfiguration(accelerometer_range_g=value)
+        document["version"] = 1
+        with self.assertRaisesRegex(ValueError, "remove imu.gyroscope_range_dps"):
+            sensor_profile_from_dict(document)
+
+    def test_live_bridge_rejects_historical_info_and_unavailable_sensors(self) -> None:
+        device = SiFiBridgeDevice()
+        device._device_info = {"info": {"device": {}}}
+        with self.assertRaisesRegex(DeviceError, "info.configuration"):
+            device._validate_sensor_capabilities()
+        device._device_info = {
+            "info": {**ALL_SENSOR_INFO["info"], "sensors": {"ecg": False}}
+        }
+        with self.assertRaisesRegex(DeviceError, "not physically available"):
+            device._validate_sensor_capabilities()
+
+    def test_tcp_subscribes_before_start_and_revalidates_after_start(self) -> None:
+        device = SiFiBridgeDevice()
+        events: list[str] = []
+        changed_info = {
+            "info": {
+                **ALL_SENSOR_INFO["info"],
+                "configuration": {
+                    **ALL_SENSOR_CONFIGURATION,
+                    "emg": {"enabled": True, "fs": 1000},
+                },
+            }
+        }
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch.object(device, "_launch"),
+            patch.object(device, "_send", side_effect=events.append),
+            patch.object(device, "_wait_for_response"),
+            patch.object(
+                device,
+                "_wait_for_info",
+                side_effect=[ALL_SENSOR_INFO, ALL_SENSOR_INFO, changed_info],
+            ),
+            patch.object(
+                device,
+                "_connect_tcp_when_ready",
+                side_effect=lambda: events.append("subscribe"),
+            ),
+            patch.object(device, "disconnect") as disconnect,
+            self.assertRaisesRegex(DeviceError, "expected 1600 Hz"),
+        ):
+            device.connect()
+        self.assertLess(events.index("subscribe"), events.index("start"))
+        disconnect.assert_called_once()
+
+    def test_disabled_absent_sensors_are_not_configured(self) -> None:
+        device = SiFiBridgeDevice(sensor_profile=EMG_ONLY_PROFILE, transport="stdout")
+        info = {
+            "info": {
+                "device": "SiFiBand",
+                "sensors": {
+                    name: name == "emg" for name in ALL_SENSOR_INFO["info"]["sensors"]
+                },
+                "configuration": ALL_SENSOR_INFO["info"]["configuration"],
+            }
+        }
+        sent: list[str] = []
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch.object(device, "_launch"),
+            patch.object(device, "_send", side_effect=sent.append),
+            patch.object(device, "_wait_for_response"),
+            patch.object(device, "_wait_for_info", return_value=info),
+        ):
+            device.connect()
+        self.assertEqual(
+            [
+                command.split()[1]
+                for command in sent
+                if command.startswith("configure ")
+            ],
+            ["emg", "sensors"],
+        )
 
     def test_strict_json_and_value_validation(self) -> None:
         document = sensor_profile_to_dict(ALL_SENSORS_PROFILE)
@@ -173,7 +276,7 @@ class SensorProfileTests(unittest.TestCase):
         self.assertEqual(summary["ppg_effective_rate_hz"], 50)
         self.assertEqual(summary["ppg_led_green_ma"], 9)
         self.assertEqual(summary["ppg_sensitivity"], "medium")
-        self.assertEqual(summary["imu_accelerometer_range_g"], 2)
+        self.assertEqual(summary["imu_accelerometer_range_g"], 16)
         self.assertEqual(summary["temperature_fs_hz"], 1)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "web.capture.jsonl.zst"

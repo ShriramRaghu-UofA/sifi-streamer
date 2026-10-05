@@ -14,10 +14,9 @@ EDA_SAMPLE_RATES = frozenset((4, 8, 16, 32, 50))
 PPG_SPS_VALUES = frozenset((50, 100, 200, 400, 800))
 PPG_AVERAGING_FACTORS = frozenset((1, 2, 4, 8, 16, 32))
 IMU_SAMPLE_RATES = frozenset((25, 50, 100, 200))
-ACCELEROMETER_RANGES = frozenset((2, 4, 8, 16))
-GYROSCOPE_RANGES = frozenset((16, 31, 63, 125, 250, 500, 1000, 2000))
+ACCELEROMETER_RANGES = frozenset((8, 16))
 TEMPERATURE_SAMPLE_RATES = frozenset((0.1, 1.0, 2.0, 10.0))
-SENSOR_PROFILE_VERSION = 1
+SENSOR_PROFILE_VERSION = 2
 
 
 class MainsNotch(StrEnum):
@@ -165,8 +164,7 @@ class PpgConfiguration:
 class ImuConfiguration:
     enabled: bool = True
     sample_rate_hz: int = 100
-    accelerometer_range_g: int = 2
-    gyroscope_range_dps: int = 16
+    accelerometer_range_g: int = 16
 
     def __post_init__(self) -> None:
         _require_bool("imu.enabled", self.enabled)
@@ -175,9 +173,6 @@ class ImuConfiguration:
             "imu.accelerometer_range_g",
             self.accelerometer_range_g,
             ACCELEROMETER_RANGES,
-        )
-        _require_int_choice(
-            "imu.gyroscope_range_dps", self.gyroscope_range_dps, GYROSCOPE_RANGES
         )
 
 
@@ -278,7 +273,6 @@ def bridge_configuration_commands(profile: SiFiSensorProfile) -> tuple[str, ...]
         (
             f"configure imu --fs {imu.sample_rate_hz}"
             f" --acc-range {imu.accelerometer_range_g}"
-            f" --gyro-range {imu.gyroscope_range_dps}"
         ),
         f"configure temperature --fs {_number(profile.temperature.sample_rate_hz)}",
         (
@@ -369,21 +363,25 @@ def _filters(value: Mapping[str, object], name: str) -> FilterConfiguration:
 
 
 def sensor_profile_from_dict(document: object) -> SiFiSensorProfile:
-    """Decode a strict, complete version-1 profile mapping."""
+    """Decode a strict, complete version-2 profile mapping."""
     root = _object(
         document,
         "profile",
         {"version", "ecg", "emg", "eda", "imu", "ppg", "temperature"},
     )
     if root["version"] != SENSOR_PROFILE_VERSION:
-        raise ValueError(f"unsupported sensor profile version: {root['version']!r}")
+        raise ValueError(
+            f"unsupported sensor profile version: {root['version']!r}; "
+            "use version 2, remove imu.gyroscope_range_dps, and explicitly "
+            "select imu.accelerometer_range_g as 8 or 16"
+        )
     ecg = _object(root["ecg"], "ecg", _FILTER_KEYS)
     emg = _object(root["emg"], "emg", _FILTER_KEYS)
     eda = _object(root["eda"], "eda", _FILTER_KEYS | {"frequency_hz"})
     imu = _object(
         root["imu"],
         "imu",
-        {"enabled", "sample_rate_hz", "accelerometer_range_g", "gyroscope_range_dps"},
+        {"enabled", "sample_rate_hz", "accelerometer_range_g"},
     )
     ppg = _object(
         root["ppg"],
@@ -425,7 +423,6 @@ def sensor_profile_from_dict(document: object) -> SiFiSensorProfile:
             _boolean(imu["enabled"], "imu.enabled"),
             _integer(imu["sample_rate_hz"], "imu.sample_rate_hz"),
             _integer(imu["accelerometer_range_g"], "imu.accelerometer_range_g"),
-            _integer(imu["gyroscope_range_dps"], "imu.gyroscope_range_dps"),
         ),
         PpgConfiguration(
             _boolean(ppg["enabled"], "ppg.enabled"),

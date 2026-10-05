@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import math
 import socket
 import time
 from collections.abc import Iterator, Mapping
@@ -31,8 +32,12 @@ class ModalitySpec:
     """
 
     channels: tuple[str, ...]
-    sample_rate: int
+    sample_rate: float
     dtype: npt.DTypeLike = np.float32
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.sample_rate) or self.sample_rate <= 0:
+            raise ValueError("modality sample_rate must be finite and positive")
 
     @property
     def n_channels(self) -> int:
@@ -153,7 +158,9 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
     """Derive enabled modality layouts from a bridge ``info`` document.
 
     EMG, ECG, EDA, IMU, and temperature use the bridge ``fs`` value. PPG uses
-    ``sps / avg``. Channel names come from :data:`DEFAULT_MODALITIES`.
+    ``sps / avg`` without rounding. Both current ``configuration`` and historical
+    ``device`` configuration blocks are readable. Channel names come from
+    :data:`DEFAULT_MODALITIES`.
 
     Raises:
         DeviceError: If the document shape is invalid or contains no enabled
@@ -162,10 +169,11 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
     root = info.get("info", info)
     if not isinstance(root, Mapping):
         raise DeviceError("Bridge info is invalid")
-    device = root.get("device", root)
+    device = root.get("configuration", root.get("device", root))
     if not isinstance(device, Mapping):
         raise DeviceError("Bridge device info is invalid")
     result: Modalities[ModalitySpec] = Modalities()
+    sensors = root.get("sensors")
     for modality, name in (
         (Modality.EMG, "emg"),
         (Modality.ECG, "ecg"),
@@ -173,6 +181,8 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
         (Modality.IMU, "imu"),
         (Modality.TEMPERATURE, "temperature"),
     ):
+        if isinstance(sensors, Mapping) and sensors.get(name) is False:
+            continue
         values = device.get(name, {})
         if (
             isinstance(values, Mapping)
@@ -183,12 +193,13 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
                 modality,
                 ModalitySpec(
                     DEFAULT_MODALITIES.require(modality).channels,
-                    round(float(values["fs"])),
+                    float(values["fs"]),
                 ),
             )
     ppg = device.get("ppg", {})
     if (
         isinstance(ppg, Mapping)
+        and not (isinstance(sensors, Mapping) and sensors.get("ppg") is False)
         and ppg.get("enabled", True)
         and ppg.get("sps")
         and ppg.get("avg")
@@ -197,7 +208,7 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
             Modality.PPG,
             ModalitySpec(
                 DEFAULT_MODALITIES.require(Modality.PPG).channels,
-                round(float(ppg["sps"]) / float(ppg["avg"])),
+                float(ppg["sps"]) / float(ppg["avg"]),
             ),
         )
     if not tuple(result.enabled()):
@@ -222,7 +233,7 @@ class SiFiPacket:
 
     packet_type: str
     timestamps: list[float]
-    data: dict[str, list[float]]
+    data: dict[str, list[float | None]]
     received_at: float
     sample_rate: float | None = None
     samples_lost: int = 0

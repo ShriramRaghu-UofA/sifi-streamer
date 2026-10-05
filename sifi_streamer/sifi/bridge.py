@@ -167,7 +167,7 @@ class SiFiBridgeDevice:
             sensor_profile,
         )
         self._process: subprocess.Popen[str] | None = None
-        self._control: queue.Queue[dict[str, object]] = queue.Queue()
+        self._control: queue.Queue[dict[str, object] | None] = queue.Queue()
         self._stdout_packets: queue.Queue[SiFiPacket | None] = queue.Queue()
         self._stderr_lines: deque[str] = deque(maxlen=50)
         self._reader: PacketReader | None = None
@@ -230,22 +230,66 @@ class SiFiBridgeDevice:
             )
             self._launch()
             self._send("connect")
-            for command in bridge_configuration_commands(self._sensor_profile):
-                self._send(command)
+            self._wait_for_response("connect")
             self._send("info")
             self._device_info = self._wait_for_info()
+            available_sensors = self._validate_sensor_capabilities()
+            for command in bridge_configuration_commands(self._sensor_profile):
+                sensor = command.split()[1]
+                if sensor != "sensors" and not available_sensors[sensor]:
+                    continue
+                self._send(command)
+                self._wait_for_response("configure")
+            self._send("info")
+            self._device_info = self._wait_for_info()
+            self._validate_sensor_capabilities()
             self._modalities = modalities_from_device_info(self._device_info)
             self._validate_configured_modalities()
-            self._send("start")
             if self._transport is BridgeTransport.TCP:
                 self._connect_tcp_when_ready()
             elif self._transport is BridgeTransport.STDOUT:
                 self._reader.connect()
+            self._send("start")
+            self._wait_for_response("start")
+            self._send("info")
+            self._device_info = self._wait_for_info()
+            self._validate_sensor_capabilities()
+            self._modalities = modalities_from_device_info(self._device_info)
+            self._validate_configured_modalities()
             logger.info("SiFi bridge connected")
-        except DeviceError, OSError, ValueError:
+        except DeviceError, OSError, TypeError, ValueError:
             logger.exception("SiFi bridge connection failed")
             self.disconnect()
             raise
+
+    def _validate_sensor_capabilities(self) -> dict[str, bool]:
+        """Reject unavailable requested sensors and the old live info layout."""
+        assert self._device_info is not None
+        root = self._device_info.get("info")
+        if not isinstance(root, dict) or not isinstance(
+            root.get("configuration"), dict
+        ):
+            raise DeviceError(
+                "Live acquisition requires bridge 2.0.1 info.configuration"
+            )
+        sensors = root.get("sensors")
+        if not isinstance(sensors, dict):
+            raise DeviceError("Bridge info must report physical sensors")
+        available: dict[str, bool] = {}
+        for name in ("ecg", "emg", "eda", "imu", "ppg", "temperature"):
+            present = sensors.get(name)
+            if not isinstance(present, bool):
+                raise DeviceError(f"Bridge sensors.{name} must be a bool")
+            available[name] = present
+            if (
+                name != "temperature"
+                and getattr(self._sensor_profile, name).enabled
+                and not present
+            ):
+                raise DeviceError(
+                    f"Requested {name} sensor is not physically available"
+                )
+        return available
 
     def _validate_configured_modalities(self) -> None:
         """Require bridge-reported enabled states and rates to match the profile."""
@@ -290,6 +334,13 @@ class SiFiBridgeDevice:
                     f"expected {rate:g} Hz"
                 )
         temperature = self.modalities.temperature
+        assert self._device_info is not None
+        root = self._device_info["info"]
+        assert isinstance(root, dict)
+        sensors = root["sensors"]
+        assert isinstance(sensors, dict)
+        if (temperature is not None) != sensors["temperature"]:
+            raise DeviceError("Bridge reported temperature in the wrong state")
         if temperature is not None and not math.isclose(
             temperature.sample_rate, self._sensor_profile.temperature.sample_rate_hz
         ):
@@ -386,13 +437,14 @@ class SiFiBridgeDevice:
             return
         try:
             for line in process.stdout:
+                line = line.removeprefix("> ").strip()
                 try:
                     document = json.loads(line)
                 except json.JSONDecodeError:
                     continue
                 if not isinstance(document, dict):
                     continue
-                if isinstance(document.get("info"), dict):
+                if "packet_type" not in document:
                     self._control.put(document)
                 elif (
                     self._transport is BridgeTransport.STDOUT
@@ -400,6 +452,7 @@ class SiFiBridgeDevice:
                 ) and (packet := packet_from_json_line(line)):
                     self._stdout_packets.put(packet)
         finally:
+            self._control.put(None)
             if self._transport is BridgeTransport.STDOUT:
                 self._stdout_packets.put(None)
 
@@ -414,11 +467,20 @@ class SiFiBridgeDevice:
     def _send(self, command: str) -> None:
         if self._process is None or self._process.stdin is None:
             raise DeviceError("sifibridge process is not running")
-        self._process.stdin.write(command + "\n")
-        self._process.stdin.flush()
+        try:
+            self._process.stdin.write(command + "\n")
+            self._process.stdin.flush()
+        except (OSError, ValueError) as exc:
+            raise DeviceError(
+                f"Unable to send bridge command {command!r}: {exc}"
+            ) from exc
         logger.debug("Sent sifibridge command: %s", command)
 
     def _wait_for_info(self) -> dict[str, object]:
+        return self._wait_for_response("info")
+
+    def _wait_for_response(self, response_type: str) -> dict[str, object]:
+        """Wait for one matching acknowledgement or raise the bridge error."""
         deadline = time.monotonic() + self._startup_timeout_s
         while time.monotonic() < deadline:
             if self._process is not None and self._process.poll() is not None:
@@ -427,11 +489,22 @@ class SiFiBridgeDevice:
                     f"sifibridge exited with code {self._process.returncode}: {details}"
                 )
             try:
-                return self._control.get(timeout=0.1)
+                document = self._control.get(timeout=0.1)
             except queue.Empty:
-                pass
+                continue
+            if document is None:
+                raise DeviceError(f"Bridge stdout closed waiting for {response_type}")
+            if "error" in document:
+                raise DeviceError(f"Bridge {response_type} failed: {document['error']}")
+            if not isinstance(document.get(response_type), dict):
+                raise DeviceError(
+                    f"Unexpected bridge response waiting for {response_type}: "
+                    f"{document}"
+                )
+            return document
         raise DeviceError(
-            f"Timed out after {self._startup_timeout_s:.1f}s waiting for bridge info"
+            f"Timed out after {self._startup_timeout_s:.1f}s "
+            f"waiting for bridge {response_type}"
         )
 
     def _connect_tcp_when_ready(self) -> None:

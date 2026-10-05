@@ -98,6 +98,82 @@ class DeviceTests(unittest.TestCase):
         with self.assertRaisesRegex(DeviceError, "TCP receive failed"):
             device.read_packet()
 
+    def test_current_info_preserves_fractional_rates_and_physical_capabilities(
+        self,
+    ) -> None:
+        modalities = modalities_from_device_info(
+            {
+                "info": {
+                    "device": "SiFiBandFocus",
+                    "sensors": {"ecg": False},
+                    "configuration": {
+                        "ecg": {"enabled": True, "fs": 500},
+                        "ppg": {"enabled": True, "sps": 50, "avg": 32},
+                        "temperature": {"fs": 0.1},
+                    },
+                }
+            }
+        )
+        self.assertIsNone(modalities.ecg)
+        self.assertEqual(modalities.require(Modality.PPG).sample_rate, 1.5625)
+        self.assertEqual(modalities.require(Modality.TEMPERATURE).sample_rate, 0.1)
+
+    def test_optional_packet_fields_and_new_metadata_are_preserved(self) -> None:
+        for document in (
+            {"packet_type": "start_time", "start_time": 1_790_000_000.25},
+            {"packet_type": "status", "device_state": "connected_ble_only_working"},
+            {"packet_type": "ecg", "timestamps": [0.0], "data": {"ecg": [None]}},
+        ):
+            with self.subTest(document=document):
+                packet = packet_from_json_line(json.dumps(document))
+                assert packet is not None
+                self.assertEqual(packet.capture_document(), document)
+                self.assertIsNone(packet.sample_rate)
+                self.assertEqual(packet.samples_lost, 0)
+
+    def test_bridge_errors_unexpected_responses_and_eof_fail_promptly(self) -> None:
+        cases: tuple[tuple[dict[str, object] | None, str], ...] = (
+            ({"error": {"message": "invalid configuration"}}, "invalid configuration"),
+            ({"start": {}}, "Unexpected bridge response"),
+            (None, "stdout closed"),
+        )
+        for response, message in cases:
+            with self.subTest(response=response):
+                device = SiFiBridgeDevice()
+                device._control.put(response)
+                with self.assertRaisesRegex(DeviceError, message):
+                    device._wait_for_response("configure")
+
+    def test_stdout_demultiplexes_commands_packets_and_eof(self) -> None:
+        process = FakeProcess()
+        process.stdout = io.StringIO(
+            '> {"configure":{}}\n' + PACKET + '\n> {"error":{"message":"rejected"}}\n'
+        )
+        device = SiFiBridgeDevice(transport=BridgeTransport.STDOUT)
+        with patch.object(device, "_process", process):
+            device._read_stdout()
+        self.assertEqual(device._wait_for_response("configure"), {"configure": {}})
+        with self.assertRaisesRegex(DeviceError, "rejected"):
+            device._wait_for_info()
+        packet = device._stdout_packets.get_nowait()
+        assert packet is not None
+        self.assertEqual(packet.packet_type, "ecg")
+        self.assertIsNone(device._stdout_packets.get_nowait())
+
+    def test_bridge_stdin_failure_is_translated(self) -> None:
+        class BrokenInput(io.StringIO):
+            def write(self, value: str) -> int:
+                raise BrokenPipeError("closed")
+
+        process = FakeProcess()
+        process.stdin = BrokenInput()
+        device = SiFiBridgeDevice()
+        with (
+            patch.object(device, "_process", process),
+            self.assertRaisesRegex(DeviceError, "Unable to send bridge command"),
+        ):
+            device._send("start")
+
     def test_udp_reader(self) -> None:
         reader = _UdpPacketReader("127.0.0.1", 0)
         reader.connect()

@@ -312,6 +312,19 @@ unsupported compression levels fail during construction.
 
 ## Explicit bridge installation
 
+Live acquisition targets bridge 2.0.1. Sensor-profile JSON uses version 2:
+`ImuConfiguration.accelerometer_range_g` accepts 8 or 16 (default 16), and
+`gyroscope_range_dps` has been removed. Old profile files require an explicit
+migration; historical captures retain raw decoding and SiFi table export.
+`ModalitySpec.sample_rate` retains fractional Hz rather than rounding.
+
+Packet timestamps are preserved as supplied. Current bridge signal timestamps
+are acquisition-relative seconds, `received_at` is host Unix time, and the
+top-level Start Time `start_time` is Unix time. Start Time and Status metadata
+are retained in `SiFiPacket.document` and authoritative raw records. Null sample
+gaps and omitted packet rates remain supported. Export's measured rate column
+may vary between packets; it is not required to equal configured nominal Hz.
+
 Bridge acquisition never occurs during package installation, import, capture
 creation, or device startup. Invoke `sifi-download-bridge` or call
 `install_bridge(output_directory, *, latest=False, tag=None, force=False)`.

@@ -1,12 +1,12 @@
 [project]
 name = "sifi-streamer"
-version = "0.6.4"
+version = "0.7.0"
 description = "Reusable SiFi acquisition, live streaming, and authoritative capture logging"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [
-    "numpy>=2.5",
+    "numpy==2.5.3",
 ]
 
 [project.scripts]
@@ -35,7 +35,7 @@ build-backend = "hatchling.build"
 packages = ["sifi_streamer"]
 
 [tool.hatch.build]
-exclude = ["frontend/node_modules"]
+exclude = ["frontend/node_modules", "bin", "bin-tested", "schemas", "schemas-old"]
 
 [tool.ruff]
 target-version = "py314"

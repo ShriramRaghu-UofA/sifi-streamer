@@ -54,3 +54,43 @@ complete `sensor_profile` API. The standalone `--emg-sample-rate` option was
 replaced by profile selection plus `--emg-fs`. This is an API/CLI break but not
 a capture-format change. Sensor profiles use strict versioned JSON and bridge
 startup sends every supported setting explicitly for reproducibility.
+
+## Bridge 2.0.1 migration
+
+Live acquisition targets bridge 2.0.1 and requires its `info.configuration` and
+physical `sensors` report. There is no legacy live command dialect. Historical
+schema-v2 captures remain readable and exportable: the SiFi metadata parser
+accepts both the old `info.device` configuration block and `info.configuration`.
+Neither reading nor export rewrites captures or converts their timestamp origin.
+
+Sensor profiles now use JSON version 2. `ImuConfiguration` no longer accepts
+`gyroscope_range_dps`; the device's IMU fixes that range. Accelerometer range
+must be 8 or 16 g, with a default of 16 g. To migrate a version-1 JSON profile,
+remove `imu.gyroscope_range_dps`, explicitly choose an allowed accelerometer
+range, and set `version` to 2. Version-1 profiles fail with migration guidance
+rather than silently changing requested settings. The web configuration summary
+also removes the obsolete gyroscope setting.
+
+Startup checks connect, configure, and start acknowledgements and reports bridge
+errors immediately, including JSON prefixed by the bridge's piped REPL prompt.
+Requested physically absent sensors are rejected; absent
+disabled sensors are not configured. TCP subscribers connect before acquisition
+starts so the transport can receive the initial Start Time packet. The complete
+post-start info document supplies capture startup metadata, and enabled states
+and rates are checked again after start before publishing the fixed registry.
+
+SiFi rates retain fractional values, including low temperature rates and PPG
+`sps / avg`. Export keeps measured packet rates per sample without requiring
+them to equal the configured nominal rate or each other. With no recorded
+configuration, the first available measured rate remains the stream's estimate
+(`rate_source = packet`); otherwise the existing default is used. Missing first
+packet rates, empty signal packets, and null sample gaps are supported. Invalid
+nonpositive rates and non-finite capture JSON remain errors.
+
+Capture schema version 2 and SiFi table schema version 1 are unchanged. The
+downloader pins bridge 2.0.1 with GitHub-published hashes for all five platforms;
+hardware and firmware validation remains a maintainer responsibility.
+
+Downloaded bridge executables and generated comparison schemas in `bin`,
+`bin-tested`, `schemas`, and `schemas-old` are local inputs and are excluded
+from distribution archives.

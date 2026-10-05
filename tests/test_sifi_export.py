@@ -122,6 +122,57 @@ class SiFiExportTests(unittest.TestCase):
         self.assertEqual(tables.streams["nominal_rate_hz"].unique().tolist(), [1000.0])
         self.assertEqual(tables.streams["rate_source"].unique().tolist(), ["packet"])
 
+    def test_old_and_current_info_export_jitter_missingness_and_unchanged_clocks(
+        self,
+    ) -> None:
+        configuration = {"emg": {"enabled": True, "fs": 1600}}
+        for info in (
+            {"device": configuration},
+            {"device": "SiFiBand", "configuration": configuration},
+        ):
+            with self.subTest(info=info), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "rates.capture.jsonl.zst"
+                first = emg_packet((None, 2.0), sample_rate=1597.15)
+                first.pop("sample_rate")
+                first.pop("samples_lost")
+                first["timestamps"] = [0.0, 1 / 1600]
+                with CaptureLogWriter(path, "rates") as writer:
+                    writer.append_packet({"info": info})
+                    writer.append_packet(
+                        {"packet_type": "start_time", "start_time": 1_790_000_000.25}
+                    )
+                    writer.append_packet(first)
+                    writer.append_packet(emg_packet((3.0,), sample_rate=1597.15))
+                    writer.append_packet(emg_packet((4.0,), sample_rate=1601.2))
+                original = path.read_bytes()
+                tables = read_sifi_capture_tables(path)
+                self.assertEqual(path.read_bytes(), original)
+            signal = tables.signals[Modality.EMG]
+            self.assertTrue(pd.isna(signal.loc[0, "emg0"]))
+            self.assertTrue(pd.isna(signal.loc[0, "reported_sample_rate_hz"]))
+            self.assertEqual(
+                signal["reported_sample_rate_hz"].iloc[2:].tolist(), [1597.15, 1601.2]
+            )
+            self.assertEqual(signal["device_time_s"].iloc[:2].tolist(), [0.0, 1 / 1600])
+            self.assertEqual(
+                tables.streams["nominal_rate_hz"].unique().tolist(), [1600.0]
+            )
+
+    def test_empty_signal_packet_and_invalid_reported_rates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "empty.capture.jsonl.zst"
+            with CaptureLogWriter(path, "empty") as writer:
+                writer.append_packet({"packet_type": "ecg"})
+            tables = read_sifi_capture_tables(path)
+            self.assertTrue(tables.signals[Modality.ECG].empty)
+        for rate in (0, -1):
+            with self.subTest(rate=rate), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "bad.capture.jsonl.zst"
+                with CaptureLogWriter(path, "bad") as writer:
+                    writer.append_packet({**emg_packet((1.0,)), "sample_rate": rate})
+                with self.assertRaisesRegex(SiFiExportError, "positive"):
+                    read_sifi_capture_tables(path)
+
     def test_incompatible_attribute_types_and_normalized_names_fail(self) -> None:
         cases = (
             (("same", 1), ("same", "one")),

@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 
 from sifi_streamer.exceptions import StreamerError
 
-TESTED_VERSION = "2.0.0-b21"
+TESTED_VERSION = "2.0.1"
 REPOSITORY_URL = "https://github.com/SiFiLabs/sifi-bridge-pub"
 LATEST_RELEASE_API = (
     "https://api.github.com/repos/SiFiLabs/sifi-bridge-pub/releases/latest"
@@ -31,19 +31,19 @@ MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 _TESTED_SHA256 = {
     "aarch64-apple-darwin.tar.gz": (
-        "a4fef1c924bb30784f4e0e73dbb767080445b3b0fec1e35929488963bbc5f9b1"
+        "d6dcc93c282c2bcc4da907ef2253ca80c9cebe58fec86d9d933a41cf0b209f75"
     ),
     "aarch64-unknown-linux-gnu.tar.gz": (
-        "4e20e343c70394f3bb4ffc1cc390ff6882bca9106dc460112e3ddad120400e52"
+        "29c7a01ed2fa165e3ecef89b0652f65dc2e1c5ad182e9b0231c51f3dfbfdbaba"
     ),
     "x86_64-apple-darwin.tar.gz": (
-        "ace77636bd9f5aafc0ef6b12c35a2dd8ea2bbbb369e89aa11cd14c31b35101f2"
+        "2a042b5b8cad497586c91ec51fcc9a1dd93979b3367d3b3084b2a9da8625a4ed"
     ),
     "x86_64-pc-windows-msvc.zip": (
-        "430695acae73d0cf8f199d00462d93c4e6c9bad0eea96f8e6dada7a7aeef9ff1"
+        "2c482ae876ac31a005163c39de31dc7b9315282da8f3fb8c4362c14bf85dd437"
     ),
     "x86_64-unknown-linux-gnu.tar.gz": (
-        "467e19d72143c6129ae427868ead0542fcb70b4969b8dcc15c2112e71c5e3b53"
+        "5e5351d1af8483b165a9a0a80f60d05f1b9544f73e8918e33b9ecef8f4ba7454"
     ),
 }
 

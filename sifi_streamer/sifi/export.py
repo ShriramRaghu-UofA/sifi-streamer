@@ -190,7 +190,9 @@ def _device_modalities(
     packet: Mapping[str, object],
 ) -> dict[Modality, ModalitySpec] | None:
     root = packet.get("info")
-    if not isinstance(root, Mapping) or "device" not in root:
+    if not isinstance(root, Mapping) or not (
+        "device" in root or "configuration" in root
+    ):
         return None
     try:
         modalities = modalities_from_device_info(packet)
@@ -216,13 +218,13 @@ def _packet_rows(
     capture_file: str,
 ) -> tuple[list[dict[str, object]], float | None]:
     packet = record.packet
-    timestamps, data = packet.get("timestamps"), packet.get("data")
+    timestamps, data = packet.get("timestamps", []), packet.get("data", {})
     prefix = f"raw_packet sequence {record.sequence} ({modality.value})"
     if not isinstance(timestamps, list) or not isinstance(data, Mapping):
         raise SiFiExportError(f"{prefix} requires timestamp and data arrays")
     channel_values: dict[str, list[object]] = {}
     for channel in spec.channels:
-        values = data.get(channel)
+        values = data.get(channel, [] if not timestamps else None)
         if not isinstance(values, list):
             raise SiFiExportError(f"{prefix} is missing channel {channel!r}")
         if len(values) != len(timestamps):
@@ -296,15 +298,7 @@ def _rate(
     reported: Mapping[Modality, float],
 ) -> tuple[float, str]:
     if modality in declared:
-        expected = float(declared[modality].sample_rate)
-        if modality in reported and not math.isclose(
-            expected, reported[modality], rel_tol=1e-6
-        ):
-            raise SiFiExportError(
-                f"{modality.value} reports {reported[modality]:g} Hz but captured "
-                f"device info declares {expected:g} Hz"
-            )
-        return expected, "device_info"
+        return float(declared[modality].sample_rate), "device_info"
     if modality in reported:
         return reported[modality], "packet"
     return float(DEFAULT_MODALITIES.require(modality).sample_rate), "default"
@@ -398,12 +392,7 @@ def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
         )
         signal_rows[modality].extend(rows)
         if packet_rate is not None:
-            previous = reported_rates.setdefault(modality, packet_rate)
-            if not math.isclose(previous, packet_rate, rel_tol=1e-6):
-                raise SiFiExportError(
-                    f"{modality.value} packets report inconsistent sample rates: "
-                    f"{previous:g} and {packet_rate:g} Hz"
-                )
+            reported_rates.setdefault(modality, packet_rate)
 
     stream_rows: list[dict[str, object]] = []
     signals: dict[Modality, pd.DataFrame] = {}

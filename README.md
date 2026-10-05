@@ -55,7 +55,7 @@ proprietary vendor software provided by **SiFi Labs Inc.** SiFi Bridge is free
 to use but is not open-source software. It is distributed separately and is
 not covered by this repository's MIT License. Software built on it should
 credit it as "SiFi Bridge (SiFi Labs Inc.)." The tested bridge release is
-pinned below because the bridge is still in beta and later releases may
+pinned below because the bridge is evolving and later releases may
 introduce incompatible changes.
 
 SiFi Labs Inc. grants permission to download, install, and run the SiFi Bridge
@@ -83,7 +83,7 @@ Questions about a specific use case should be sent to
 Bridge acquisition is always an explicit user action. Installing this package
 or starting a capture never downloads or updates vendor software.
 
-Install the maintainer-tested `2.0.0-b21` release into the default `bin`
+Install the pinned `2.0.1` release into the default `bin`
 directory:
 
 ```powershell
@@ -106,7 +106,7 @@ uv run sifi-download-bridge --latest --output-directory C:\tools\sifi
 A specific untested release tag can be selected explicitly:
 
 ```powershell
-uv run sifi-download-bridge --tag 2.0.0-b21 --output-directory C:\tools\sifi
+uv run sifi-download-bridge --tag 2.0.1 --output-directory C:\tools\sifi
 ```
 
 The utility auto-detects supported Windows, macOS, and Linux architectures,
