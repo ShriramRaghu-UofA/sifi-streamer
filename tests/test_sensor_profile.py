@@ -160,7 +160,7 @@ class SensorProfileTests(unittest.TestCase):
             device._validate_sensor_capabilities()
 
     def test_tcp_subscribes_before_start_and_revalidates_after_start(self) -> None:
-        device = SiFiBridgeDevice()
+        device = SiFiBridgeDevice(transport=BridgeTransport.TCP)
         events: list[str] = []
         changed_info = {
             "info": {

@@ -18,6 +18,7 @@ from sifi_streamer.acquisition import (
     StreamerConfig,
 )
 from sifi_streamer.acquisition.ring_buffer import SeqlockRingBuffer
+from sifi_streamer.acquisition.worker.recorder import RecorderFSM
 from sifi_streamer.capture import CaptureLogReader, RawPacket
 from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi import SyntheticSiFiDevice
@@ -28,6 +29,7 @@ from sifi_streamer.sifi.bridge import (
     _UdpPacketReader,
     bridge_executable_name,
 )
+from sifi_streamer.sifi.cli.capture import build_parser as capture_parser
 from sifi_streamer.sifi.devices import (
     Modality,
     SiFiBandDevice,
@@ -35,6 +37,7 @@ from sifi_streamer.sifi.devices import (
     packet_from_json_line,
 )
 from sifi_streamer.sifi.sensor_profile import ALL_SENSORS_PROFILE, EMG_ONLY_PROFILE
+from sifi_streamer.web.cli import build_parser as web_parser
 
 PACKET = (
     '{"packet_type":"ecg","timestamps":[1.0],"data":{"ecg":[2.5]},"received_at":3.0}'
@@ -56,6 +59,69 @@ class FakeProcess:
 
 
 class DeviceTests(unittest.TestCase):
+    def test_capture_transport_defaults_and_explicit_socket_options(self) -> None:
+        self.assertEqual(SiFiBridgeDevice()._transport, BridgeTransport.STDOUT)
+        for parser_factory in (capture_parser, web_parser):
+            for transport in (None, "tcp", "udp", "stdout"):
+                with self.subTest(parser=parser_factory, transport=transport):
+                    arguments = ["session.capture.jsonl.zst", "--capture-id", "session"]
+                    if transport is not None:
+                        arguments += ["--transport", transport]
+                    args = parser_factory().parse_args(arguments)
+                    self.assertEqual(args.transport, transport or "stdout")
+        args = web_parser().parse_args(
+            [
+                "session.capture.jsonl.zst",
+                "--transport",
+                "tcp",
+                "--port",
+                "5000",
+                "--web-port",
+                "8080",
+            ]
+        )
+        self.assertEqual((args.port, args.web_port), (5000, 8080))
+
+    def test_stdout_capture_preserves_events_metadata_and_unknown_packets(self) -> None:
+        documents = [
+            {
+                "packet_type": kind,
+                "received_at": 1.0,
+                "vendor_extension": {"nested": [1, None]},
+                **fields,
+            }
+            for kind, fields in (
+                ("event", {"timestamps": [1.0], "data": {"event": [7]}}),
+                ("status", {"device_state": "connected_ble_only_working"}),
+                ("memory", {"status": "memory_download_completed"}),
+                ("device_info", {"firmware": "new"}),
+                ("start_time", {"start_time": 1790000000.25}),
+                ("future_packet", {"new_field": True}),
+            )
+        ]
+        process = FakeProcess()
+        process.stdout = io.StringIO(
+            '{"configure":{}}\n'
+            + "\n".join("> " + json.dumps(document) for document in documents)
+            + "\n"
+        )
+        device = SiFiBridgeDevice()
+        with patch.object(device, "_process", process):
+            device._read_stdout()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.capture.jsonl.zst"
+            recorder = RecorderFSM(StreamerConfig(), None)
+            recorder.start_capture(path, "events")
+            while (packet := device._stdout_packets.get_nowait()) is not None:
+                recorder.on_packet(packet)
+            recorder.stop_capture()
+            captured = [
+                record.packet
+                for record in CaptureLogReader(path)
+                if isinstance(record, RawPacket)
+            ]
+        self.assertEqual(captured, documents)
+
     def test_bridge_executable_name_is_platform_specific(self) -> None:
         self.assertEqual(bridge_executable_name("Windows"), "sifibridge.exe")
         self.assertEqual(bridge_executable_name("Linux"), "sifibridge")

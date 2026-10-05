@@ -224,13 +224,39 @@ than a privileged acquisition path.
 
 ## CLI capture
 
+Both `sifi-capture` and `sifi-capture-web` use **stdout** for bridge data by
+default. The managed bridge runs as a child process; stdout is read internally
+and saved to the capture, rather than printed as raw data in your terminal.
+Select `--transport tcp` or `--transport udp` to use a socket instead. This
+option controls the bridge data transport, independently of the dashboard's
+HTTP server. Python helpers likewise default to `transport="stdout"`.
+
+Run these commands from the repository with `uv run` (or omit `uv run` when the
+console scripts are installed on your PATH). Choose a new output filename for
+each capture; existing captures cannot be overwritten.
+
+Record EMG and IMU over stdout until Ctrl+C:
+
 ```powershell
-sifi-capture recording.capture.jsonl.zst --capture-id session-001 `
+uv run sifi-capture recording.capture.jsonl.zst --capture-id session-001 `
   --bridge-executable C:\tools\sifibridge.exe --sensor-preset emg-imu
-sifi-capture timed.capture.jsonl.zst --capture-id baseline --duration 300
-sifi-capture notes.capture.jsonl.zst --capture-id annotated --interactive
-sifi-capture-web monitored.capture.jsonl.zst --capture-id session-001
 ```
+
+Record for five minutes over TCP, or enter annotations interactively over UDP:
+
+```powershell
+uv run sifi-capture timed.capture.jsonl.zst --capture-id baseline `
+  --duration 300 --transport tcp --host 127.0.0.1 --port 5000
+uv run sifi-capture notes.capture.jsonl.zst --capture-id annotated `
+  --interactive --transport udp --host 127.0.0.1 --port 5000
+```
+
+Without `--duration` or `--interactive`, recording continues until Ctrl+C.
+`--duration` and `--interactive` are mutually exclusive. The package launches
+and configures the bridge for all three transports; you do not start another
+bridge manually. `--host` and `--port` specify the bridge TCP listener or UDP
+destination and are unused for stdout. Keep the host at `127.0.0.1` for local
+capture.
 
 Hardware capture defaults to a complete all-sensors profile. Every supported
 sensor setting is sent explicitly before acquisition, including settings for
@@ -266,6 +292,38 @@ Ctrl+C becomes `operator_interrupt`; the worker and bridge are stopped
 orderly so the capture is flushed.
 
 ## Local capture dashboard
+
+Start the dashboard with the default stdout transport:
+
+```powershell
+uv run sifi-capture-web monitored.capture.jsonl.zst --capture-id session-001 `
+  --bridge-executable C:\tools\sifibridge.exe --sensor-preset emg-imu
+```
+
+Start web capture with **TCP** on port 5000 and the dashboard on port 8080:
+
+```powershell
+uv run sifi-capture-web tcp.capture.jsonl.zst --capture-id tcp-session `
+  --transport tcp --host 127.0.0.1 --port 5000 --web-port 8080 `
+  --bridge-executable C:\tools\sifibridge.exe --sensor-preset emg-imu
+```
+
+Use UDP, a saved profile, scalar session metadata, and a reusable kinds file:
+
+```powershell
+uv run sifi-capture-web udp.capture.jsonl.zst --capture-id udp-session `
+  --transport udp --port 5000 --sensor-profile sensors.json `
+  --attribute operator=Shriram --attribute session=1 --kinds-file kinds.json `
+  --no-open --web-port 8080
+```
+
+`--web-port` selects the dashboard HTTP port; its default `0` asks the OS to
+assign a free port. It is separate from the bridge's `--port`. Open the printed
+URL, including its token, and use the page's start/stop controls to record.
+`--no-open` suppresses automatic browser opening. For a hardware-free dashboard,
+use `uv run sifi-capture-web demo.capture.jsonl.zst --synthetic`; omit hardware
+sensor options. Run either launcher with `--help` for all flags, including sensor
+overrides and web health thresholds.
 
 `sifi-capture-web` starts a loopback-only Python server, prints its URL, and
 opens the default browser unless `--no-open` is supplied. The launcher fixes
@@ -315,6 +373,19 @@ rewritten. When supplied by the connected device, its complete startup-info
 document is preserved as the first raw packet after capture start; for SiFi
 hardware this includes the bridge-reported firmware, configuration, and sample
 rates.
+
+Every decoded vendor data packet received while recording is stored as a
+complete `raw_packet`, including `event`, `status`, `memory`, `device_info`,
+`start_time`, and unknown future packet types and fields. Only declared signal
+streams enter shared memory and signal tables; other packets remain available
+through `CaptureLogReader`. Vendor `event` packets remain vendor raw packets;
+application markers and segments have their own authoritative records. The
+latest Start Time packet is retained across acquisition startup and inserted
+after device info when recording starts. Other packets received before the
+capture starts are not backfilled. Bridge command acknowledgements, stderr,
+and malformed/non-object JSON are not capture data. The capture preserves what
+the selected transport delivers; it cannot recover missing BLE samples or UDP
+datagrams (vendor null gaps and loss counts are preserved).
 
 Install `sifi-streamer[parquet]` for canonical SiFi pandas tables and derived
 Parquet datasets:

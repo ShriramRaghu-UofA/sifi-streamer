@@ -148,7 +148,7 @@ class SiFiBridgeDevice:
         port: int = 5000,
         executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
         startup_timeout_s: float = 20.0,
-        transport: BridgeTransport | str = BridgeTransport.TCP,
+        transport: BridgeTransport | str = BridgeTransport.STDOUT,
         sensor_profile: SiFiSensorProfile = ALL_SENSORS_PROFILE,
     ) -> None:
         (

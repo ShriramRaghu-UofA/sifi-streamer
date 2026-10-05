@@ -1,5 +1,10 @@
 # Compatibility choices
 
+Managed SiFi capture now defaults to the bridge's stdout data transport in the
+Python composition helpers, `SiFiBridgeDevice`, and both capture CLIs. Select
+`transport="tcp"` or `--transport tcp` explicitly to retain the previous default.
+TCP and UDP remain supported; raw `SiFiBandDevice` remains a TCP client.
+
 Both source `sifi_streamer` trees were compared file-by-file, excluding
 `__pycache__`. The cognitive-load-validation implementation was selected where
 it contained deliberate fixes:

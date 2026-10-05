@@ -34,7 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument(
-        "--transport", choices=tuple(BridgeTransport), default=BridgeTransport.TCP
+        "--transport",
+        choices=tuple(BridgeTransport),
+        default=BridgeTransport.STDOUT,
+        help="Bridge data transport (default: stdout); host/port apply to TCP or UDP",
     )
     add_sensor_arguments(parser)
     parser.add_argument("--synthetic", action="store_true")
@@ -46,7 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--maximum-lost-samples", type=int, default=0)
     parser.add_argument("--no-health-log", action="store_true")
     parser.add_argument("--no-open", action="store_true")
-    parser.add_argument("--web-port", type=int, default=0)
+    parser.add_argument(
+        "--web-port",
+        type=int,
+        default=0,
+        help="Dashboard HTTP port (default: automatic); separate from --port",
+    )
     return parser
 
 

@@ -39,7 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument(
-        "--transport", choices=tuple(BridgeTransport), default=BridgeTransport.TCP
+        "--transport",
+        choices=tuple(BridgeTransport),
+        default=BridgeTransport.STDOUT,
+        help="Bridge data transport (default: stdout); host/port apply to TCP or UDP",
     )
     add_sensor_arguments(parser)
     parser.add_argument(

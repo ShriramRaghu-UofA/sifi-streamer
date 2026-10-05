@@ -111,7 +111,7 @@ segments.
 ## Creating a SiFi capture
 
 `create_sifi_capture(capture_file, capture_id, attributes=None, *,
-bridge_executable=..., host="127.0.0.1", port=5000, transport="tcp",
+bridge_executable=..., host="127.0.0.1", port=5000, transport="stdout",
 sensor_profile=None, synthetic=False, config=None)` from `sifi_streamer.sifi`
 returns an unstarted generic controller composed with an
 `AcquisitionCaptureBackend`. No process, device, or file is created until
