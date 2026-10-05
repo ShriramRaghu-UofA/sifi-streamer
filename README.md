@@ -335,9 +335,18 @@ marker/segment controls.
 Capture and annotation metadata are JSON objects containing simple scalar
 values: text, numbers, booleans, or `null`. They attach searchable facts such as
 an operator, condition, or session number to a record; nested objects and lists
-are rejected. The dashboard explains each field, validates malformed JSON
-before sending it, and shows visible success or error feedback for commands.
-Dracula is the default theme, with persistent Nord and light alternatives.
+are rejected. The dashboard provides a field editor with explicit value types;
+you do not need to write JSON. Duplicate names and invalid numbers are rejected
+before sending commands. Signals, Annotations, Health, and Session views keep
+live plots, reusable kinds, diagnostic rules, and setup distinct; capture
+controls stay visible. Stopping asks for confirmation and flushes open segments.
+
+The dashboard uses Skeleton's Svelte components and design system. Cerberus in
+dark mode is the default, with Catppuccin, Concord, Dracula, Mint, Modern,
+Rosepine, and Wintry themes. Appearance offers light, dark, and system modes;
+both theme and mode persist in your browser. Plots retain null gaps and show
+nominal, reported, and observed rates. Live connection errors and view overruns
+are visible independently of capture status.
 
 Marker and segment kinds have independent generated IDs. A segment kind named
 `Task` uses `Task_01`, `Task_02`, and so on by default. Pass `--kinds-file` to
@@ -349,11 +358,14 @@ Both capture CLIs configure console logging. The foreground, worker, bridge,
 recorder, annotations, shutdown, and health warning/recovery transitions are
 reported without logging raw packets or routine dashboard polling.
 
-The dashboard requires its per-launch URL token and bundles Svelte, daisyUI,
+The dashboard requires its per-launch URL token and bundles Svelte, Skeleton,
 and uPlot assets in the wheel for offline use. Installing from a wheel or Git
 does not require Node.js because the compiled dashboard assets are committed
 under `sifi_streamer/web/assets`. Node.js is needed only to change and rebuild
 the frontend.
+
+See [frontend/README.md](frontend/README.md) for development, browser tests,
+and the component choices used by the dashboard.
 
 ## Synthetic capture
 

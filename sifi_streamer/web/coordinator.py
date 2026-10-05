@@ -367,7 +367,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/bootstrap":
             self._api(lambda: self.server.coordinator.bootstrap())
             return
-        assets = {"/": "index.html", "/app.js": "app.js", "/app.css": "app.css"}
+        assets = {
+            "/": "index.html",
+            "/app.js": "app.js",
+            "/app.css": "app.css",
+            "/favicon.svg": "favicon.svg",
+        }
         if path not in assets:
             self.send_error(HTTPStatus.NOT_FOUND)
             return

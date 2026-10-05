@@ -44,7 +44,10 @@ Install exactly the locked frontend dependencies and validate the source:
 Push-Location frontend
 npm ci
 npm run check
+npm run format:check
 npm run build
+npx playwright install chromium
+npm test
 Pop-Location
 ```
 
@@ -56,6 +59,11 @@ Do not hand-edit generated files in `sifi_streamer/web/assets`.
 When changing a `.svelte` file, follow the repository's Svelte skill guidance
 and keep the Svelte checker clean. Rebuilding is required even when a source
 change appears to affect only styling.
+
+The browser suite includes the bundled dashboard against a real Python
+synthetic acquisition and capture readback. `uv` must be on PATH, or specify
+its executable in `UV_EXE`. See [frontend/README.md](frontend/README.md) for
+live development and component guidance.
 
 ## Full release check
 
