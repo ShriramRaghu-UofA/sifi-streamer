@@ -150,6 +150,21 @@ test('appearance persists and narrow screens have no page overflow', async ({ pa
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test('startup failure preserves its cause and removes the start action', async ({ page }) => {
+  await mockSession(page);
+  await page.route('**/api/capture/start', (route) =>
+    route.fulfill({
+      status: 400,
+      json: { state: 'failed', error: 'backend failed: physical sensor report missing' },
+    }),
+  );
+  await page.goto('/#test-token');
+  await page.getByRole('button', { name: 'Start capture', exact: true }).click();
+  await expect(page.getByRole('alert').getByText(/physical sensor report missing/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start capture', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Capture started', { exact: true })).toHaveCount(0);
+});
+
 test('failed commands remain actionable and never claim a saved capture', async ({ page }) => {
   await mockSession(page);
   await page.route('**/api/capture/start', (route) =>

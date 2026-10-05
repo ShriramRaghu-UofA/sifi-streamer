@@ -1,8 +1,11 @@
+import io
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi import create_sifi_capture
@@ -12,6 +15,7 @@ from sifi_streamer.sifi.cli.sensor_options import (
     resolve_sensor_profile,
     sensor_profile_summary,
 )
+from sifi_streamer.sifi.devices import SiFiPacket
 from sifi_streamer.sifi.sensor_profile import (
     ALL_SENSORS_PROFILE,
     EMG_IMU_PROFILE,
@@ -27,6 +31,7 @@ from sifi_streamer.sifi.sensor_profile import (
 from sifi_streamer.web.cli import main as web_main
 
 ALL_SENSOR_CONFIGURATION = {
+    "sensors": dict.fromkeys(("ecg", "emg", "eda", "imu", "ppg", "temperature"), True),
     "ecg": {"enabled": True, "fs": 500},
     "emg": {"enabled": True, "fs": 1600},
     "eda": {"enabled": True, "fs": 50},
@@ -37,15 +42,67 @@ ALL_SENSOR_CONFIGURATION = {
 ALL_SENSOR_INFO = {
     "info": {
         "device": "SiFiBand",
-        "sensors": dict.fromkeys(
-            ("ecg", "emg", "eda", "imu", "ppg", "temperature"), True
-        ),
         "configuration": ALL_SENSOR_CONFIGURATION,
     }
 }
 
 
 class SensorProfileTests(unittest.TestCase):
+    def test_stdout_reader_receives_packets_after_connect_and_reconnect(self) -> None:
+        device = SiFiBridgeDevice(transport="stdout")
+
+        def read(packets: list[SiFiPacket]) -> None:
+            packets.append(device.read_packet())
+
+        for _ in range(2):
+            process = Mock(
+                stdin=io.StringIO(),
+                stdout=io.StringIO(
+                    '> {"packet_type":"emg","timestamps":[1.0],"data":{"emg":[2.5]}}\n'
+                ),
+                stderr=io.StringIO(),
+            )
+
+            packets: list[SiFiPacket] = []
+            with (
+                patch("pathlib.Path.exists", return_value=True),
+                patch.object(
+                    device,
+                    "_launch",
+                    side_effect=partial(setattr, device, "_process", process),
+                ),
+                patch.object(device, "_send"),
+                patch.object(device, "_wait_for_response"),
+                patch.object(device, "_wait_for_info", return_value=ALL_SENSOR_INFO),
+            ):
+                device.connect()
+            device._read_stdout()
+            reader = threading.Thread(target=read, args=(packets,), daemon=True)
+            reader.start()
+            try:
+                reader.join(1)
+                self.assertFalse(reader.is_alive(), "stdout packet was not delivered")
+                self.assertEqual(packets[0].packet_type, "emg")
+                self.assertEqual(packets[0].data, {"emg": [2.5]})
+            finally:
+                device.disconnect()
+                reader.join(1)
+
+    def test_live_bridge_requires_nested_physical_sensor_report(self) -> None:
+        device = SiFiBridgeDevice()
+        for sensors in (None, [], {"ecg": "true"}):
+            with self.subTest(sensors=sensors):
+                device._device_info = {
+                    "info": {
+                        "configuration": {
+                            **ALL_SENSOR_CONFIGURATION,
+                            "sensors": sensors,
+                        }
+                    }
+                }
+                with self.assertRaises(DeviceError):
+                    device._validate_sensor_capabilities()
+
     def test_default_profile_and_exhaustive_commands(self) -> None:
         profile = ALL_SENSORS_PROFILE
         self.assertEqual(profile.emg.sample_rate_hz, 1600)
@@ -154,7 +211,13 @@ class SensorProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(DeviceError, "info.configuration"):
             device._validate_sensor_capabilities()
         device._device_info = {
-            "info": {**ALL_SENSOR_INFO["info"], "sensors": {"ecg": False}}
+            "info": {
+                **ALL_SENSOR_INFO["info"],
+                "configuration": {
+                    **ALL_SENSOR_CONFIGURATION,
+                    "sensors": {"ecg": False},
+                },
+            }
         }
         with self.assertRaisesRegex(DeviceError, "not physically available"):
             device._validate_sensor_capabilities()
@@ -198,10 +261,13 @@ class SensorProfileTests(unittest.TestCase):
         info = {
             "info": {
                 "device": "SiFiBand",
-                "sensors": {
-                    name: name == "emg" for name in ALL_SENSOR_INFO["info"]["sensors"]
+                "configuration": {
+                    **ALL_SENSOR_CONFIGURATION,
+                    "sensors": {
+                        name: name == "emg"
+                        for name in ALL_SENSOR_CONFIGURATION["sensors"]
+                    },
                 },
-                "configuration": ALL_SENSOR_INFO["info"]["configuration"],
             }
         }
         sent: list[str] = []

@@ -46,7 +46,13 @@ export class Dashboard {
       signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(60000)]),
     });
     const value = await response.json();
-    if (!response.ok) throw new Error(value.error ?? `Request failed (${response.status})`);
+    if (!response.ok) {
+      if (value.state && this.bootstrap) {
+        this.bootstrap = { ...this.bootstrap, state: value.state, error: value.error };
+        if (this.live) this.live = { ...this.live, state: value.state, error: value.error };
+      }
+      throw new Error(value.error ?? `Request failed (${response.status})`);
+    }
     return value as T;
   }
   async initialize() {

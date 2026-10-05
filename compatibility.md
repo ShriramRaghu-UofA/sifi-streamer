@@ -63,7 +63,8 @@ startup sends every supported setting explicitly for reproducibility.
 ## Bridge 2.0.1 migration
 
 Live acquisition targets bridge 2.0.1 and requires its `info.configuration` and
-physical `sensors` report. There is no legacy live command dialect. Historical
+physical `info.configuration.sensors` report. There is no legacy live command
+dialect. Historical
 schema-v2 captures remain readable and exportable: the SiFi metadata parser
 accepts both the old `info.device` configuration block and `info.configuration`.
 Neither reading nor export rewrites captures or converts their timestamp origin.

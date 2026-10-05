@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.acquisition.runtime import CaptureRuntime
 from sifi_streamer.capture.records import Attributes, Scalar, validate_attributes
+from sifi_streamer.exceptions import StreamerError
 from sifi_streamer.web.annotations import (
     AnnotationKindDefinition,
     AnnotationKindRegistry,
@@ -28,6 +29,14 @@ from sifi_streamer.web.health_log import HealthLogWriter, default_health_path
 type RuntimeFactory = Callable[[str, Attributes], CaptureRuntime]
 
 logger = logging.getLogger(__name__)
+
+
+def _error_message(exc: BaseException) -> str:
+    messages = [str(exc)]
+    while exc.__cause__ is not None:
+        exc = exc.__cause__
+        messages.append(str(exc))
+    return ": ".join(messages)
 
 
 def _wire(value: Any) -> Any:
@@ -104,6 +113,8 @@ class WebCaptureCoordinator:
     ) -> None:
         with self._lock:
             if self._state != "setup":
+                if self._state == "failed" and self._error is not None:
+                    raise RuntimeError(self._error)
                 raise RuntimeError("this dashboard has already started a capture")
             if not capture_id:
                 raise ValueError("capture_id must be non-empty")
@@ -117,13 +128,15 @@ class WebCaptureCoordinator:
             health_path = default_health_path(self.output)
             if enabled and health_path.exists():
                 raise FileExistsError(f"health log already exists: {health_path}")
+            values = validate_attributes(attributes or {})
             self._state = "starting"
             logger.info("Starting capture %r at %s", capture_id, self.output)
-            runtime = self._factory(capture_id, validate_attributes(attributes or {}))
-            if thresholds is not None:
-                self._thresholds = thresholds
-            runtime.monitor.update_thresholds(self._thresholds)
+            runtime: CaptureRuntime | None = None
             try:
+                runtime = self._factory(capture_id, values)
+                if thresholds is not None:
+                    self._thresholds = thresholds
+                runtime.monitor.update_thresholds(self._thresholds)
                 runtime.controller.start()
                 _ = runtime.monitor.streams
                 if enabled:
@@ -137,10 +150,17 @@ class WebCaptureCoordinator:
                             "kinds": self._kinds.definitions,
                         },
                     )
-            except BaseException:
+            except BaseException as exc:
                 logger.exception("Capture %r failed during startup", capture_id)
-                runtime.controller.close("startup_failure")
+                self._error = _error_message(exc)
                 self._state = "failed"
+                try:
+                    if runtime is not None:
+                        runtime.controller.close("startup_failure")
+                finally:
+                    if self._health_log is not None:
+                        self._health_log.close()
+                        self._health_log = None
                 raise
             self._runtime = runtime
             self._state = "recording"
@@ -476,9 +496,16 @@ class _Handler(BaseHTTPRequestHandler):
             TypeError,
             ValueError,
             OSError,
+            StreamerError,
         ) as exc:
             logger.warning("API request %s failed: %s", self.path, exc)
-            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            self._json(
+                HTTPStatus.BAD_REQUEST,
+                {
+                    "error": _error_message(exc),
+                    "state": self.server.coordinator.bootstrap()["state"],
+                },
+            )
             return False
         self._json(HTTPStatus.OK, value)
         return True

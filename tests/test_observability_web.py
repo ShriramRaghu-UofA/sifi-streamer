@@ -1,7 +1,12 @@
+import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import numpy as np
 
@@ -12,6 +17,7 @@ from sifi_streamer.acquisition import (
     create_capture_runtime,
 )
 from sifi_streamer.capture import CaptureLogReader, SegmentStarted
+from sifi_streamer.exceptions import CaptureInitializationError, DeviceError
 from sifi_streamer.sifi import create_sifi_capture_runtime
 from sifi_streamer.web import (
     AnnotationKindDefinition,
@@ -19,6 +25,7 @@ from sifi_streamer.web import (
     AnnotationTarget,
     WebCaptureCoordinator,
 )
+from sifi_streamer.web.coordinator import _Handler, _WebServer
 
 
 class CustomPacket:
@@ -79,6 +86,65 @@ class CustomDevice:
 
 
 class ObservabilityTests(unittest.TestCase):
+    def test_startup_failure_returns_json_and_preserves_cause(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Mock()
+
+            def fail():
+                try:
+                    raise DeviceError("physical sensor report missing")
+                except DeviceError as exc:
+                    raise CaptureInitializationError("backend failed") from exc
+
+            runtime.controller.start.side_effect = fail
+            coordinator = WebCaptureCoordinator(
+                Path(directory) / "failed.capture.jsonl.zst",
+                lambda capture_id, attributes: runtime,
+            )
+            server = _WebServer(("127.0.0.1", 0), _Handler)
+            server.coordinator = coordinator
+            server.token = "test"
+            server.origin = f"http://127.0.0.1:{server.server_port}"
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                for _ in range(2):
+                    request = Request(
+                        f"{server.origin}/api/capture/start",
+                        data=json.dumps({"capture_id": "failed"}).encode(),
+                        headers={
+                            "X-SiFi-Session-Token": "test",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    with self.assertRaises(HTTPError) as error:
+                        urlopen(request, timeout=5)
+                    with error.exception as response:
+                        self.assertEqual(response.code, 400)
+                        result = json.load(response)
+                    self.assertEqual(result["state"], "failed")
+                    self.assertIn("physical sensor report missing", result["error"])
+                    self.assertNotIn("already started", result["error"])
+                self.assertEqual(coordinator.bootstrap()["error"], result["error"])
+                self.assertEqual(coordinator.live({})["error"], result["error"])
+                runtime.controller.start.assert_called_once()
+                runtime.controller.close.assert_called_once_with("startup_failure")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
+    def test_factory_failure_sets_failed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            coordinator = WebCaptureCoordinator(
+                Path(directory) / "failed.capture.jsonl.zst",
+                Mock(side_effect=DeviceError("factory failed")),
+            )
+            with self.assertRaisesRegex(DeviceError, "factory failed"):
+                coordinator.start("failed", {})
+            self.assertEqual(coordinator.bootstrap()["state"], "failed")
+            self.assertEqual(coordinator.bootstrap()["error"], "factory failed")
+
     def test_custom_stream_validity_cursor_and_health(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "custom.capture.jsonl.zst"

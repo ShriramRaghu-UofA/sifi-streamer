@@ -171,8 +171,8 @@ class DeviceTests(unittest.TestCase):
             {
                 "info": {
                     "device": "SiFiBandFocus",
-                    "sensors": {"ecg": False},
                     "configuration": {
+                        "sensors": {"ecg": False},
                         "ecg": {"enabled": True, "fs": 500},
                         "ppg": {"enabled": True, "sps": 50, "avg": 32},
                         "temperature": {"fs": 0.1},

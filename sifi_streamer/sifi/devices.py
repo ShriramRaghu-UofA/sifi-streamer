@@ -187,7 +187,7 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
     if not isinstance(device, Mapping):
         raise DeviceError("Bridge device info is invalid")
     result: Modalities[ModalitySpec] = Modalities()
-    sensors = root.get("sensors")
+    sensors = device.get("sensors", root.get("sensors"))
     for modality, name in (
         (
             Modality.EMG_SINGLE if root.get("device") == "BioPoint" else Modality.EMG,

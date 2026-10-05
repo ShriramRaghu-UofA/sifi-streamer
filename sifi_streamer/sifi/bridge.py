@@ -214,11 +214,9 @@ class SiFiBridgeDevice:
                 "'uv run sifi-download-bridge --tested --output-directory bin' "
                 "or visit https://github.com/SiFiLabs/sifi-bridge-pub/"
             )
-        self._control, self._stdout_packets, self._reader = (
-            queue.Queue(),
-            queue.Queue(),
-            self._make_reader(),
-        )
+        self._control = queue.Queue()
+        self._stdout_packets = queue.Queue()
+        self._reader = self._make_reader()
         if self._transport is BridgeTransport.UDP:
             self._reader.connect()
         try:
@@ -272,9 +270,9 @@ class SiFiBridgeDevice:
             raise DeviceError(
                 "Live acquisition requires bridge 2.0.1 info.configuration"
             )
-        sensors = root.get("sensors")
+        sensors = root["configuration"].get("sensors")
         if not isinstance(sensors, dict):
-            raise DeviceError("Bridge info must report physical sensors")
+            raise DeviceError("Bridge info.configuration must report physical sensors")
         available: dict[str, bool] = {}
         for name in ("ecg", "emg", "eda", "imu", "ppg", "temperature"):
             present = sensors.get(name)
@@ -339,7 +337,7 @@ class SiFiBridgeDevice:
         assert self._device_info is not None
         root = self._device_info["info"]
         assert isinstance(root, dict)
-        sensors = root["sensors"]
+        sensors = root["configuration"]["sensors"]
         assert isinstance(sensors, dict)
         if (temperature is not None) != sensors["temperature"]:
             raise DeviceError("Bridge reported temperature in the wrong state")
