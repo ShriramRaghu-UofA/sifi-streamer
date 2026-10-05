@@ -2,10 +2,11 @@
 
 import logging
 import threading
+from copy import deepcopy
 from pathlib import Path
 
 from sifi_streamer.acquisition.config import StreamerConfig
-from sifi_streamer.acquisition.devices import AcquisitionPacket
+from sifi_streamer.acquisition.devices import AcquisitionPacket, CaptureContextPacket
 from sifi_streamer.capture.records import Attributes, CaptureLogWriter
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class RecorderFSM:
             threading.Lock(),
             None,
         )
+        self._context_documents: dict[str, dict[str, object]] = {}
 
     def start_capture(
         self, capture_file: Path, capture_id: str, attributes: Attributes | None = None
@@ -57,6 +59,8 @@ class RecorderFSM:
                 # document. Preserve it in the authoritative stream before any
                 # acquired packets without changing the schema-v2 vocabulary.
                 self._writer.append_packet(self._device_info)
+            for document in self._context_documents.values():
+                self._writer.append_packet(document)
             logger.info(
                 "Opened authoritative capture %s (id=%r)", capture_file, capture_id
             )
@@ -117,10 +121,18 @@ class RecorderFSM:
     def on_packet(self, packet: AcquisitionPacket) -> None:
         """Append a complete packet document when capture is active."""
         with self._lock:
-            if (
-                self._writer is not None
-                and (document := packet.capture_document()) is not None
-            ):
+            document = packet.capture_document()
+            if document is None:
+                return
+            if isinstance(packet, CaptureContextPacket):
+                key = packet.capture_context_key
+                if key is not None:
+                    if not key or key != key.strip():
+                        raise ValueError(
+                            "capture context key must be non-empty and trimmed"
+                        )
+                    self._context_documents[key] = deepcopy(document)
+            if self._writer is not None:
                 self._writer.append_packet(document)
 
     def close(self) -> None:

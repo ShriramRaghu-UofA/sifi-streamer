@@ -369,7 +369,7 @@ def sensor_profile_from_dict(document: object) -> SiFiSensorProfile:
         "profile",
         {"version", "ecg", "emg", "eda", "imu", "ppg", "temperature"},
     )
-    if root["version"] != SENSOR_PROFILE_VERSION:
+    if _integer(root["version"], "version") != SENSOR_PROFILE_VERSION:
         raise ValueError(
             f"unsupported sensor profile version: {root['version']!r}; "
             "use version 2, remove imu.gyroscope_range_dps, and explicitly "

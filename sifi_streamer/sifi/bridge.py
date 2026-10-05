@@ -300,7 +300,9 @@ class SiFiBridgeDevice:
                 self._sensor_profile.ecg.sample_rate_hz,
             ),
             (
-                Modality.EMG,
+                Modality.EMG_SINGLE
+                if self.modalities.emg_single is not None
+                else Modality.EMG,
                 self._sensor_profile.emg.enabled,
                 self._sensor_profile.emg.sample_rate_hz,
             ),

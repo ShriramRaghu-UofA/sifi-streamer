@@ -91,6 +91,25 @@ Capture schema version 2 and SiFi table schema version 1 are unchanged. The
 downloader pins bridge 2.0.1 with GitHub-published hashes for all five platforms;
 hardware and firmware validation remains a maintainer responsibility.
 
+BioPoint EMG uses `Modality.EMG_SINGLE` (`emg`) and the `Modalities.emg_single`
+slot, with one `emg` channel. SiFiBand retains `Modality.EMG` (`emg_armband`)
+and its eight-channel layout. Live registries select the layout from device
+metadata; table export recognizes both packet types without changing its schema.
+
+The recorder retains the latest SiFi Start Time document and includes it after
+device info when each capture starts, even if acquisition began earlier. These
+are ordinary schema-v2 raw packets. Original device fields and receipt times
+are preserved; record host timestamps describe insertion into the capture.
+Signal samples received before capture startup are not backfilled. Other device
+integrations can opt into this behavior through the structural
+`CaptureContextPacket.capture_context_key` property; existing packet protocols
+remain unchanged.
+
+TCP reads use bounded waits to allow local shutdown on Windows, including when
+the bridge sends no further packets. A failed device connection or registry
+validation disconnects the partially started device before acknowledging failure.
+Profile JSON versions must be integers; floats, strings, and booleans are rejected.
+
 Downloaded bridge executables and generated comparison schemas in `bin`,
 `bin-tested`, `schemas`, and `schemas-old` are local inputs and are excluded
 from distribution archives.

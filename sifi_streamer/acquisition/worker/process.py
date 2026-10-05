@@ -14,6 +14,7 @@ import numpy as np
 
 from sifi_streamer.acquisition.config import StreamerConfig
 from sifi_streamer.acquisition.devices import (
+    AcquisitionDevice,
     AcquisitionPacket,
     DeviceFactory,
     SignalStreamSpec,
@@ -65,6 +66,7 @@ def background_main(
     )
     _ignore_console_interrupts()
     logger.info("Acquisition worker starting")
+    device: AcquisitionDevice | None = None
     try:
         device = device_factory()
         device.connect()
@@ -77,7 +79,20 @@ def background_main(
         )
     except (DeviceError, OSError, RuntimeError, TypeError, ValueError) as exc:
         logger.exception("Acquisition worker startup failed")
-        ack_queue.put(ErrorAck(str(exc)))
+        message = str(exc)
+        if device is not None:
+            try:
+                device.disconnect()
+            except (
+                DeviceError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as cleanup:
+                logger.exception("Device cleanup after failed startup also failed")
+                message += f"; device cleanup failed: {cleanup}"
+        ack_queue.put(ErrorAck(message))
         return
     rings: dict[str, SeqlockRingBuffer] = {}
     shms: dict[str, SharedMemory] = {}

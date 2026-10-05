@@ -89,6 +89,18 @@ class AcquisitionPacket(Protocol):
 
 
 @runtime_checkable
+class CaptureContextPacket(Protocol):
+    """Optional packet extension for context needed by later captures.
+
+    A stable key retains only the latest document for that context. Ordinary
+    signal packets return ``None`` or do not implement this extension.
+    """
+
+    @property
+    def capture_context_key(self) -> str | None: ...
+
+
+@runtime_checkable
 class AcquisitionDevice(Protocol):
     """Injected device with a stream registry fixed after connection."""
 
