@@ -119,3 +119,11 @@ Profile JSON versions must be integers; floats, strings, and booleans are reject
 Downloaded bridge executables and generated comparison schemas in `bin`,
 `bin-tested`, `schemas`, and `schemas-old` are local inputs and are excluded
 from distribution archives.
+
+Both capture launchers accept optional `--device-handle HANDLE`: a BLE name
+such as `BioPoint_AA92`, a MAC address on Windows/Linux, or a BLE UUID on macOS.
+Python callers pass `device_handle` to `SiFiBridgeDevice`, `create_sifi_capture`,
+or `create_sifi_capture_runtime`. Omission retains first-matching-device
+selection. A supplied handle is sent as `connect HANDLE`; bridge errors abort
+startup without falling back to automatic selection. Synthetic capture rejects
+this option. Capture records are unchanged.

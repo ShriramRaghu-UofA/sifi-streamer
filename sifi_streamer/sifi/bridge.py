@@ -137,6 +137,7 @@ class SiFiBridgeDevice:
         startup_timeout_s: Maximum wait for bridge info and TCP readiness.
         transport: Packet transport name or :class:`BridgeTransport` member.
         sensor_profile: Complete sensor state sent before every acquisition.
+        device_handle: BLE name, MAC address, or UUID; None auto-connects.
 
     Raises:
         ValueError: If ``transport`` is unsupported.
@@ -150,6 +151,7 @@ class SiFiBridgeDevice:
         startup_timeout_s: float = 20.0,
         transport: BridgeTransport | str = BridgeTransport.STDOUT,
         sensor_profile: SiFiSensorProfile = ALL_SENSORS_PROFILE,
+        device_handle: str | None = None,
     ) -> None:
         (
             self._host,
@@ -166,6 +168,13 @@ class SiFiBridgeDevice:
             startup_timeout_s,
             sensor_profile,
         )
+        if device_handle is not None and (
+            not device_handle.strip() or any(c in device_handle for c in "\r\n\0")
+        ):
+            raise ValueError(
+                "device_handle must be nonempty and contain no CR, LF, or NUL"
+            )
+        self._device_handle = device_handle
         self._process: subprocess.Popen[str] | None = None
         self._control: queue.Queue[dict[str, object] | None] = queue.Queue()
         self._stdout_packets: queue.Queue[SiFiPacket | None] = queue.Queue()
@@ -211,7 +220,9 @@ class SiFiBridgeDevice:
             raise DeviceError(
                 f"sifibridge executable not found: {self._executable}; "
                 "download it explicitly with "
-                "'uv run sifi-download-bridge --tested --output-directory bin' "
+                "'uv run sifi-download-bridge --tested --output-directory "
+                f'"{self._executable.parent}"'
+                "' "
                 "or visit https://github.com/SiFiLabs/sifi-bridge-pub/"
             )
         self._control = queue.Queue()
@@ -227,7 +238,13 @@ class SiFiBridgeDevice:
                 self._port,
             )
             self._launch()
-            self._send("connect")
+            command = "connect"
+            if self._device_handle is not None:
+                handle = self._device_handle
+                if any(c.isspace() or c in "\"'\\" for c in handle):
+                    handle = json.dumps(handle, ensure_ascii=False)
+                command += f" {handle}"
+            self._send(command)
             self._wait_for_response("connect")
             self._send("info")
             self._device_info = self._wait_for_info()

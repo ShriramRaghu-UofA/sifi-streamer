@@ -423,3 +423,11 @@ filter incomplete/superseded attempts. Conversion is not authoritative.
 
 See the [Python API reference](api.md), [architecture.md](architecture.md),
 [compatibility.md](compatibility.md), and [contribution guide](CONTRIBUTING.md).
+
+Both capture launchers accept optional `--device-handle HANDLE`: a BLE name
+such as `BioPoint_AA92`, a MAC address on Windows/Linux, or a BLE UUID on macOS.
+Python callers pass `device_handle` to `SiFiBridgeDevice`, `create_sifi_capture`,
+or `create_sifi_capture_runtime`. Omission retains first-matching-device
+selection. A supplied handle is sent as `connect HANDLE`; bridge errors abort
+startup without falling back to automatic selection. Synthetic capture rejects
+this option. Capture records are unchanged.

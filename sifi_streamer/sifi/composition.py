@@ -26,12 +26,15 @@ from sifi_streamer.sifi.sensor_profile import SiFiSensorProfile
 def _device_factory(
     *,
     bridge_executable: str | Path,
+    device_handle: str | None,
     host: str,
     port: int,
     transport: BridgeTransport | str,
     sensor_profile: SiFiSensorProfile | None,
     synthetic: bool,
 ) -> DeviceFactory:
+    if synthetic and device_handle is not None:
+        raise ValueError("device_handle cannot be used with synthetic acquisition")
     if synthetic and sensor_profile is not None:
         raise ValueError("sensor_profile cannot be used with synthetic acquisition")
     if synthetic:
@@ -41,6 +44,7 @@ def _device_factory(
         host=host,
         port=port,
         executable=bridge_executable,
+        device_handle=device_handle,
         transport=transport,
         **({"sensor_profile": sensor_profile} if sensor_profile is not None else {}),
     )
@@ -52,6 +56,7 @@ def create_sifi_capture(
     attributes: Mapping[str, Scalar] | None = None,
     *,
     bridge_executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
+    device_handle: str | None = None,
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.STDOUT,
@@ -62,6 +67,7 @@ def create_sifi_capture(
     """Compose a ready-to-start controller for real or synthetic SiFi capture."""
     factory = _device_factory(
         bridge_executable=bridge_executable,
+        device_handle=device_handle,
         host=host,
         port=port,
         transport=transport,
@@ -85,6 +91,7 @@ def create_sifi_capture_runtime(
     attributes: Mapping[str, Scalar] | None = None,
     *,
     bridge_executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
+    device_handle: str | None = None,
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.STDOUT,
@@ -96,6 +103,7 @@ def create_sifi_capture_runtime(
     """Compose the standard SiFi device with controller and monitor access."""
     factory = _device_factory(
         bridge_executable=bridge_executable,
+        device_handle=device_handle,
         host=host,
         port=port,
         transport=transport,

@@ -48,6 +48,44 @@ ALL_SENSOR_INFO = {
 
 
 class SensorProfileTests(unittest.TestCase):
+    def test_device_selection_commands(self) -> None:
+        for handle, command in (
+            (None, "connect"),
+            ("BioPoint_AA92", "connect BioPoint_AA92"),
+            ("E7:B5:AB:8B:9E:D0", "connect E7:B5:AB:8B:9E:D0"),
+            (
+                "00001122-3344-5566-7788-99AABBCCDDEE",
+                "connect 00001122-3344-5566-7788-99AABBCCDDEE",
+            ),
+            ("Device name", 'connect "Device name"'),
+        ):
+            with self.subTest(handle=handle):
+                device = SiFiBridgeDevice(device_handle=handle)
+                with (
+                    patch("pathlib.Path.exists", return_value=True),
+                    patch.object(device, "_launch"),
+                    patch.object(device, "_send") as send,
+                    patch.object(device, "_wait_for_response") as acknowledge,
+                    patch.object(
+                        device, "_wait_for_info", return_value=ALL_SENSOR_INFO
+                    ),
+                ):
+                    device.connect()
+                self.assertEqual(send.call_args_list[0].args, (command,))
+                self.assertEqual(acknowledge.call_args_list[0].args, ("connect",))
+
+    def test_invalid_device_handles(self) -> None:
+        for handle in ("", "  ", "name\nstart", "name\r", "name\0"):
+            with self.subTest(handle=handle), self.assertRaises(ValueError):
+                SiFiBridgeDevice(device_handle=handle)
+
+    def test_missing_bridge_hint_uses_configured_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "custom bridge" / "sifibridge.exe"
+            with self.assertRaises(DeviceError) as raised:
+                SiFiBridgeDevice(executable=path).connect()
+            self.assertIn(f'--output-directory "{path.parent}"', str(raised.exception))
+
     def test_stdout_reader_receives_packets_after_connect_and_reconnect(self) -> None:
         device = SiFiBridgeDevice(transport="stdout")
 

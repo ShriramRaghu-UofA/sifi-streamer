@@ -85,6 +85,18 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(capture_args.bridge_executable, DEFAULT_BRIDGE_EXECUTABLE)
         self.assertEqual(web_args.bridge_executable, DEFAULT_BRIDGE_EXECUTABLE)
 
+    def test_device_handle_option(self) -> None:
+        for parser in (build_parser(), build_web_parser()):
+            self.assertIsNone(
+                parser.parse_args(["x.zst", "--capture-id", "x"]).device_handle
+            )
+            self.assertEqual(
+                parser.parse_args(
+                    ["x.zst", "--capture-id", "x", "--device-handle", "BioPoint_AA92"]
+                ).device_handle,
+                "BioPoint_AA92",
+            )
+
     def test_export_cli_help_parser_does_not_import_optional_dependencies(self) -> None:
         args = build_export_parser().parse_args(["capture.zst", "--force"])
         self.assertEqual(args.output, None)

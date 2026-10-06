@@ -31,6 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bridge-executable", type=Path, default=DEFAULT_BRIDGE_EXECUTABLE
     )
+    parser.add_argument(
+        "--device-handle",
+        metavar="HANDLE",
+        help="BLE name, MAC (Windows/Linux), or UUID (macOS); default: auto-connect",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument(
@@ -76,6 +81,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
+    if args.synthetic and args.device_handle is not None:
+        parser.error("--device-handle cannot be used with --synthetic")
     if args.synthetic and sensor_options_used(args):
         parser.error("sensor profile options cannot be used with --synthetic")
     try:
@@ -99,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             capture_id,
             capture_attributes,
             bridge_executable=args.bridge_executable,
+            device_handle=args.device_handle,
             host=args.host,
             port=args.port,
             transport=args.transport,
