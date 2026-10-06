@@ -78,7 +78,7 @@
                   title(stream.stream_id)}
               </h3>
               <p class="field-hint mt-1">
-                {stream.channels.length} channels · nominal {formatRate(stream.nominal_rate_hz)}
+                {stream.channels.length} channels · configured {formatRate(stream.nominal_rate_hz)}
               </p>
             </div>
             <span
@@ -104,12 +104,17 @@
             </div>{/if}
           <dl class="grid grid-cols-3 gap-3 border-t border-surface-200-800 pt-4 text-xs">
             <div>
-              <dt class="muted">Reported</dt>
+              <dt class="muted">Packet-reported</dt>
               <dd class="mt-1 font-medium">{formatRate(health?.reported_rate_hz)}</dd>
             </div>
             <div>
-              <dt class="muted">Observed</dt>
+              <dt class="muted">Received rate (window estimate)</dt>
               <dd class="mt-1 font-medium">{formatRate(health?.observed_rate_hz)}</dd>
+              <dd class="field-hint">
+                Sample rows / host elapsed time · rolling
+                {dashboard.live?.thresholds.window_seconds ??
+                  dashboard.bootstrap?.thresholds.window_seconds} s window (shorter during startup)
+              </dd>
             </div>
             <div>
               <dt class="muted">Missing values</dt>

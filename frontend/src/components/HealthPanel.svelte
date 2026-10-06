@@ -24,14 +24,14 @@
       {
         key: 'minimum_rate_ratio',
         label: 'Minimum rate ratio',
-        hint: '0.9 means 90% of the nominal rate.',
+        hint: '0.9 means 90% of the configured rate.',
         step: '0.01',
         min: 0,
       },
       {
         key: 'maximum_rate_ratio',
         label: 'Maximum rate ratio',
-        hint: '1.1 means 110% of the nominal rate.',
+        hint: '1.1 means 110% of the configured rate.',
         step: '0.01',
         min: 0,
       },
@@ -68,10 +68,33 @@
   <div>
     <p class="eyebrow">Quality at a glance</p>
     <h2 class="h3 mt-2">Signal health</h2>
-    <p class="muted mt-2 text-sm">
-      Nominal is configured. Reported is measured by the bridge. Observed is measured by the
-      acquisition worker.
-    </p>
+    <dl
+      class="mt-4 divide-y divide-surface-200-800 rounded-container bg-surface-200-800/40 px-4 text-sm"
+    >
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Configured</dt>
+        <dd class="muted leading-relaxed">The profile rate confirmed by the bridge.</dd>
+      </div>
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Packet-reported</dt>
+        <dd class="muted leading-relaxed">The latest sample rate supplied in packet JSON.</dd>
+      </div>
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Received rate (window estimate)</dt>
+        <dd class="muted leading-relaxed">
+          Incoming sample rows counted using our host clock over a rolling
+          {dashboard.live?.thresholds.window_seconds ??
+            dashboard.bootstrap?.thresholds.window_seconds} s evaluation window (shorter during startup).
+        </dd>
+      </div>
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Packet timestamp-derived rate</dt>
+        <dd class="muted leading-relaxed">
+          Calculated from the spacing of sample timestamps supplied in packets. These timestamps
+          come from the source, rather than being assigned by our host.
+        </dd>
+      </div>
+    </dl>
   </div>
   <section class="panel space-y-4">
     <h3 class="font-semibold">Stream diagnostics</h3>
@@ -80,9 +103,10 @@
         <table class="table whitespace-nowrap">
           <thead
             ><tr
-              ><th>Stream</th><th>Health</th><th>Nominal</th><th>Reported</th><th>Observed</th><th
-                >Source</th
-              ><th>Missing</th><th>Lost</th><th>Packets</th></tr
+              ><th>Stream</th><th>Health</th><th>Configured</th><th>Packet-reported</th><th
+                >Received rate (window estimate)</th
+              ><th>Packet timestamp-derived rate</th><th>Missing</th><th>Lost</th><th>Packets</th
+              ></tr
             ></thead
           ><tbody
             >{#each health.streams as stream (stream.stream_id)}<tr

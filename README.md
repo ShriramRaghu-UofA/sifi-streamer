@@ -345,7 +345,11 @@ The dashboard uses Skeleton's Svelte components and design system. Cerberus in
 dark mode is the default, with Catppuccin, Concord, Dracula, Mint, Modern,
 Rosepine, and Wintry themes. Appearance offers light, dark, and system modes;
 both theme and mode persist in your browser. Plots retain null gaps and show
-nominal, reported, and observed rates. Live connection errors and view overruns
+configured, packet-reported, and received window-estimated rates. Health diagnostics
+also show the packet timestamp-derived rate. Received rates count sample rows over
+host elapsed time in the rolling evaluation window (5 seconds by default, shorter
+during startup); timestamp-derived rates use per-sample timestamps supplied in
+packets. Live connection errors and view overruns
 are visible independently of capture status.
 
 Marker and segment kinds have independent generated IDs. A segment kind named
