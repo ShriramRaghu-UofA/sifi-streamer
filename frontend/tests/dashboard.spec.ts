@@ -1,6 +1,43 @@
 import { expect, test } from '@playwright/test';
 import { health, mockSession } from './fixtures';
 
+test('sensor summary surfaces rates and disabled sensors with settings collapsed', async ({
+  page,
+}) => {
+  const { session } = await mockSession(page);
+  Object.assign(session.configuration, {
+    ecg_enabled: false,
+    ecg_fs_hz: 500,
+    eda_enabled: true,
+    eda_fs_hz: 50,
+    ppg_enabled: true,
+    ppg_sps: 200,
+    ppg_effective_rate_hz: 50,
+    imu_enabled: false,
+    temperature_fs_hz: 0.1,
+  });
+  await page.goto('/#test-token');
+  const sensors = page.getByRole('list', { name: 'Sensor streams' });
+  await expect(sensors.getByRole('listitem')).toHaveCount(6);
+  const ecg = sensors.getByRole('listitem').filter({ hasText: 'ECG' });
+  await expect(ecg).toContainText('500 Hz');
+  await expect(ecg).toContainText('Disabled');
+  await expect(ecg).toHaveClass(/bg-surface-200-800/);
+  const emg = sensors.getByRole('listitem').filter({ hasText: 'EMG' });
+  await expect(emg).toContainText(/1[,.]?600 Hz/);
+  await expect(emg).toContainText('Enabled');
+  await expect(emg).toHaveClass(/bg-primary-50-950/);
+  await expect(sensors.getByRole('listitem').filter({ hasText: 'PPG' })).toContainText('50 Hz');
+  await expect(sensors.getByRole('listitem').filter({ hasText: 'Temperature' })).toContainText(
+    '0.1 Hz',
+  );
+  const settings = page.getByRole('button', { name: 'All sensor settings' });
+  await expect(settings).toHaveAttribute('aria-expanded', 'false');
+  await settings.click();
+  await expect(settings).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByText('Ppg Sps', { exact: true })).toBeVisible();
+});
+
 test('capture, annotations, health rules, stop and acknowledged shutdown', async ({
   page,
 }, testInfo) => {

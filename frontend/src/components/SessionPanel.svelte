@@ -3,12 +3,38 @@
   import { FileCheck2, SlidersHorizontal, ChevronDown } from '@lucide/svelte';
   import MetadataEditor from './MetadataEditor.svelte';
   import type { Dashboard } from '../lib/dashboard.svelte.js';
-  import { title } from '../lib/types';
+  import { formatRate, title } from '../lib/types';
+  import type { Stream } from '../lib/types';
   let { dashboard, metadataValid = $bindable(true) } = $props<{
     dashboard: Dashboard;
     metadataValid?: boolean;
   }>();
   let editable = $derived(dashboard.phase === 'setup');
+  let configuration = $derived(dashboard.bootstrap?.configuration ?? {});
+  let sensors: { id: string; label: string; rate: number; enabled: boolean }[] = $derived.by(() => {
+    const configured = [
+      { id: 'emg', label: 'EMG', rateKey: 'emg_fs_hz' },
+      { id: 'ecg', label: 'ECG', rateKey: 'ecg_fs_hz' },
+      { id: 'eda', label: 'EDA', rateKey: 'eda_fs_hz' },
+      { id: 'ppg', label: 'PPG', rateKey: 'ppg_effective_rate_hz' },
+      { id: 'imu', label: 'IMU', rateKey: 'imu_fs_hz' },
+      { id: 'temperature', label: 'Temperature', rateKey: 'temperature_fs_hz' },
+    ].filter((sensor) => typeof configuration[sensor.rateKey] === 'number');
+    if (configured.length) {
+      return configured.map((sensor) => ({
+        id: sensor.id,
+        label: sensor.label,
+        rate: configuration[sensor.rateKey] as number,
+        enabled: configuration[`${sensor.id}_enabled`] !== false,
+      }));
+    }
+    return dashboard.streams.map((stream: Stream) => ({
+      id: stream.stream_id,
+      label: stream.label ?? title(stream.stream_id),
+      rate: stream.nominal_rate_hz,
+      enabled: true,
+    }));
+  });
 </script>
 
 <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -65,24 +91,49 @@
       <h2 class="h3 mt-2">Acquisition configuration</h2>
       <p class="muted mt-2 text-sm">Set by the launcher. Review it before starting.</p>
     </div>
-    <dl class="grid grid-cols-2 gap-4">
-      {#each ['device', 'transport', 'emg_fs_hz', 'imu_fs_hz'] as key (key)}
-        {#if dashboard.bootstrap?.configuration[key] != null}<div
-            class="rounded-container bg-surface-200-800 p-4"
-          >
-            <dt class="field-hint">
-              {key === 'emg_fs_hz'
-                ? 'EMG sample rate'
-                : key === 'imu_fs_hz'
-                  ? 'IMU sample rate'
-                  : title(key)}
-            </dt>
-            <dd class="mt-1 font-semibold">
-              {dashboard.bootstrap.configuration[key]}{key.endsWith('_hz') ? ' Hz' : ''}
-            </dd>
-          </div>{/if}
+    <dl class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+      {#each ['device', 'transport'] as key (key)}
+        {#if configuration[key] != null}
+          <div class="flex items-baseline gap-2">
+            <dt class="muted">{title(key)}</dt>
+            <dd class="font-medium">{configuration[key]}</dd>
+          </div>
+        {/if}
       {/each}
     </dl>
+    <div class="space-y-3">
+      <h3 class="text-sm font-semibold">Sensor streams</h3>
+      <ul class="grid grid-cols-2 gap-3 sm:grid-cols-3" aria-label="Sensor streams">
+        {#each sensors as sensor (sensor.id)}
+          <li
+            class={[
+              'min-w-0 rounded-container border p-4',
+              sensor.enabled
+                ? 'border-primary-200-800 bg-primary-50-950'
+                : 'border-surface-200-800 bg-surface-200-800 muted',
+            ]}
+          >
+            <div class="text-sm font-semibold">{sensor.label}</div>
+            <p class={['mt-2 text-xl font-semibold tabular-nums', !sensor.enabled && 'opacity-60']}>
+              {formatRate(sensor.rate)}
+            </p>
+            <p class="mt-2 flex items-center gap-2 text-xs">
+              <span
+                aria-hidden="true"
+                class={[
+                  'size-1.5 shrink-0 rounded-full',
+                  sensor.enabled ? 'bg-primary-500' : 'bg-surface-400-600',
+                ]}
+              ></span>
+              {sensor.enabled ? 'Enabled' : 'Disabled'}
+            </p>
+          </li>
+        {/each}
+      </ul>
+      {#if sensors.some((sensor) => sensor.id === 'ppg')}
+        <p class="field-hint">PPG shows the output rate after averaging.</p>
+      {/if}
+    </div>
     <Accordion collapsible>
       <Accordion.Item value="configuration"
         ><Accordion.ItemTrigger
