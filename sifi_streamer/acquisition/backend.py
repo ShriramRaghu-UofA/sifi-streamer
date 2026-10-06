@@ -55,23 +55,23 @@ class AcquisitionCaptureBackend:
             )
             self._capture_started = True
             logger.info("Authoritative capture started at %s", self._capture_file)
-        except Exception:
+        except BaseException:
             logger.exception("Could not start capture at %s", self._capture_file)
-            self._handle.__exit__(None, None, None)
             self._entered = False
+            self._handle.__exit__(None, None, None)
             raise
 
     def stop(self, reason: str = "normal_completion") -> None:
         """Stop recording and always release the background handle."""
         try:
             if self._capture_started:
-                self._handle.stop_capture(reason)
                 self._capture_started = False
+                self._handle.stop_capture(reason)
                 logger.info("Authoritative capture stopped with reason %r", reason)
         finally:
             if self._entered:
-                self._handle.__exit__(None, None, None)
                 self._entered = False
+                self._handle.__exit__(None, None, None)
 
     def start_segment(self, segment_id: str, kind: str, attributes: Attributes) -> None:
         self._handle.start_segment(segment_id, kind, dict(attributes))

@@ -305,6 +305,8 @@ def sensor_profile_to_dict(profile: SiFiSensorProfile) -> dict[str, object]:
 def _object(value: object, name: str, keys: set[str]) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{name} must be a JSON object")
+    if not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{name} keys must be strings")
     actual = set(value)
     if actual != keys:
         missing, unknown = sorted(keys - actual), sorted(actual - keys)
@@ -314,8 +316,6 @@ def _object(value: object, name: str, keys: set[str]) -> Mapping[str, object]:
         if unknown:
             details.append(f"unknown {', '.join(unknown)}")
         raise ValueError(f"{name} has {'; '.join(details)} fields")
-    if not all(isinstance(key, str) for key in value):
-        raise ValueError(f"{name} keys must be strings")
     return value
 
 

@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import math
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -68,8 +69,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.duration is not None and args.duration <= 0:
-        parser.error("--duration must be positive")
+    if args.duration is not None and (
+        not math.isfinite(args.duration) or args.duration <= 0
+    ):
+        parser.error("--duration must be finite and positive")
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
     if args.synthetic and args.device_handle is not None:

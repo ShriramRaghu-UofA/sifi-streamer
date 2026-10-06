@@ -103,7 +103,23 @@ class Modalities[T]:
 
     def get(self, modality: Modality) -> T | None:
         """Return the value for ``modality``, or ``None`` when disabled."""
-        return getattr(self, _modality_field(modality))
+        match modality:
+            case Modality.EMG:
+                return self.emg
+            case Modality.IMU:
+                return self.imu
+            case Modality.ECG:
+                return self.ecg
+            case Modality.EDA:
+                return self.eda
+            case Modality.PPG:
+                return self.ppg
+            case Modality.TEMPERATURE:
+                return self.temperature
+            case Modality.EMG_SINGLE:
+                return self.emg_single
+            case _:
+                raise ValueError(f"Unsupported modality: {modality!r}")
 
     def require(self, modality: Modality) -> T:
         """Return an enabled value.

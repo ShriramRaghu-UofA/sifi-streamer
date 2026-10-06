@@ -45,9 +45,13 @@ class SharedMemoryReader:
         dtype: npt.DTypeLike = np.float32,
     ) -> None:
         self._shm = SharedMemory(name=shm_name, create=False)
-        self._ring = SeqlockRingBuffer(
-            n_samples, n_channels, self._shm, dtype=dtype, is_owner=False
-        )
+        try:
+            self._ring = SeqlockRingBuffer(
+                n_samples, n_channels, self._shm, dtype=dtype, is_owner=False
+            )
+        except BaseException:
+            self._shm.close()
+            raise
         self._last_counter = -1
 
     @property

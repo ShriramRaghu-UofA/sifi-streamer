@@ -427,10 +427,16 @@ class CaptureLogWriter:
         monotonic_ns: Clock = time.monotonic_ns,
         unix_ns: Clock = time.time_ns,
     ) -> None:
-        if frame_target_bytes <= 0 or flush_interval_s <= 0:
-            raise ValueError("frame target and flush interval must be positive")
+        if (
+            frame_target_bytes <= 0
+            or not math.isfinite(flush_interval_s)
+            or flush_interval_s <= 0
+        ):
+            raise ValueError(
+                "frame target and flush interval must be finite and positive"
+            )
+        capture_id = _require_string(capture_id, "capture_id")
         values = validate_attributes(attributes or {})
-        self.path, self._file = path, path.open("xb")
         self._target, self._interval_ns, self._level, self._fsync = (
             frame_target_bytes,
             int(flush_interval_s * 1e9),
@@ -440,17 +446,20 @@ class CaptureLogWriter:
         self._monotonic_ns, self._unix_ns = monotonic_ns, unix_ns
         self._next_sequence, self._buffer, self._open_segments = 0, bytearray(), set()
         self._last_flush_ns, self._stopped, self._closed = monotonic_ns(), False, False
-        self._append(
-            CaptureStarted(
-                schema_version=SCHEMA_VERSION,
-                sequence=0,
-                host_monotonic_ns=self._last_flush_ns,
-                host_unix_ns=unix_ns(),
-                capture_id=_require_string(capture_id, "capture_id"),
-                attributes=values,
-            ),
-            boundary=True,
+        started = CaptureStarted(
+            schema_version=SCHEMA_VERSION,
+            sequence=0,
+            host_monotonic_ns=self._last_flush_ns,
+            host_unix_ns=unix_ns(),
+            capture_id=capture_id,
+            attributes=values,
         )
+        self.path, self._file = path, path.open("xb")
+        try:
+            self._append(started, boundary=True)
+        except BaseException:
+            self._file.close()
+            raise
 
     def _append(self, record: CaptureRecord, *, boundary: bool = False) -> int:
         if self._closed or self._stopped:
@@ -495,8 +504,7 @@ class CaptureLogWriter:
         if segment_id in self._open_segments:
             raise CaptureLifecycleError(f"segment {segment_id!r} is already open")
         values = validate_attributes(attributes or {})
-        self._open_segments.add(segment_id)
-        return self._append(
+        sequence = self._append(
             SegmentStarted(
                 schema_version=SCHEMA_VERSION,
                 sequence=self._next_sequence,
@@ -508,6 +516,8 @@ class CaptureLogWriter:
             ),
             boundary=True,
         )
+        self._open_segments.add(segment_id)
+        return sequence
 
     def stop_segment(self, segment_id: str, reason: str | None = None) -> int:
         """Append a segment stop and return its sequence number.
@@ -518,8 +528,7 @@ class CaptureLogWriter:
         """
         if segment_id not in self._open_segments:
             raise CaptureLifecycleError(f"segment {segment_id!r} is not open")
-        self._open_segments.remove(segment_id)
-        return self._append(
+        sequence = self._append(
             SegmentStopped(
                 schema_version=SCHEMA_VERSION,
                 sequence=self._next_sequence,
@@ -530,6 +539,8 @@ class CaptureLogWriter:
             ),
             boundary=True,
         )
+        self._open_segments.remove(segment_id)
+        return sequence
 
     def append_marker(
         self,

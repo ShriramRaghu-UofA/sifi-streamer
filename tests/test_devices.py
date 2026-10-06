@@ -46,6 +46,7 @@ PACKET = (
 
 class FakeProcess:
     def __init__(self) -> None:
+        self.pid = 123
         self.stdin = io.StringIO()
         self.stdout = io.StringIO()
         self.stderr = io.StringIO()

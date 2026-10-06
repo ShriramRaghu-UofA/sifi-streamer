@@ -7,7 +7,8 @@ import secrets
 import threading
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
+from enum import StrEnum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -40,9 +41,9 @@ def _error_message(exc: BaseException) -> str:
 
 
 def _wire(value: Any) -> Any:
-    if hasattr(value, "__dataclass_fields__"):
+    if is_dataclass(value) and not isinstance(value, type):
         return _wire(asdict(value))
-    if hasattr(value, "value") and isinstance(value.value, str):
+    if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, Mapping):
         return {str(key): _wire(item) for key, item in value.items()}

@@ -1,5 +1,6 @@
 """System-level streamer configuration."""
 
+import math
 from compression import zstd
 from dataclasses import dataclass
 
@@ -32,14 +33,15 @@ class StreamerConfig:
     capture_fsync_on_boundary: bool = False
 
     def __post_init__(self) -> None:
-        if self.ring_buffer_seconds <= 0:
-            raise ValueError("ring_buffer_seconds must be positive")
-        if self.ack_timeout_s <= 0:
-            raise ValueError("ack_timeout_s must be positive")
+        for name, value in (
+            ("ring_buffer_seconds", self.ring_buffer_seconds),
+            ("ack_timeout_s", self.ack_timeout_s),
+            ("capture_flush_interval_s", self.capture_flush_interval_s),
+        ):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
         if self.capture_frame_target_bytes <= 0:
             raise ValueError("capture_frame_target_bytes must be positive")
-        if self.capture_flush_interval_s <= 0:
-            raise ValueError("capture_flush_interval_s must be positive")
         if self.capture_compression_level is not None:
             try:
                 zstd.ZstdCompressor(level=self.capture_compression_level)

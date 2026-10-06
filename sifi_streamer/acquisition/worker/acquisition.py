@@ -32,7 +32,7 @@ class AcquisitionThread(threading.Thread):
         already_connected: bool = False,
     ) -> None:
         super().__init__(daemon=True, name="acquisition")
-        self._device, self._on_packet, self._stop = device, on_packet, stop_event
+        self._device, self._on_packet, self._stop_event = device, on_packet, stop_event
         self._already_connected = already_connected
         self.failure: BaseException | None = None
 
@@ -42,10 +42,17 @@ class AcquisitionThread(threading.Thread):
             if not self._already_connected:
                 self._device.connect()
             logger.info("Acquisition thread started")
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 self._on_packet(self._device.read_packet())
-        except (DeviceError, OSError, RuntimeError, TypeError, ValueError) as exc:
-            if not self._stop.is_set():
+        except (
+            AttributeError,
+            DeviceError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            if not self._stop_event.is_set():
                 self.failure = exc
                 logger.exception("Acquisition thread stopped unexpectedly")
         finally:

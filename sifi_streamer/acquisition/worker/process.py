@@ -180,9 +180,9 @@ def background_main(
                 stream_id,
                 timestamps=timestamps.tolist(),
                 validity=validity.tolist(),
-                reported_rate_hz=getattr(packet, "reported_rate_hz", None),
-                samples_lost=getattr(packet, "samples_lost", 0),
-                status=getattr(packet, "status", "ok"),
+                reported_rate_hz=packet.reported_rate_hz,
+                samples_lost=packet.samples_lost,
+                status=packet.status,
                 misaligned=misaligned,
             )
         recorder.on_packet(packet)

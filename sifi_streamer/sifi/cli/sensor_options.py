@@ -14,7 +14,6 @@ from sifi_streamer.sifi.sensor_profile import (
     PPG_SPS_VALUES,
     SENSOR_PRESETS,
     TEMPERATURE_SAMPLE_RATES,
-    PpgConfiguration,
     SiFiSensorProfile,
     load_sensor_profile,
 )
@@ -73,7 +72,8 @@ def add_sensor_arguments(parser: argparse.ArgumentParser) -> None:
 
 def sensor_options_used(args: argparse.Namespace) -> bool:
     """Return whether the invocation explicitly selected any sensor option."""
-    return any(getattr(args, name) is not None for name in _OPTION_DESTINATIONS)
+    options = vars(args)
+    return any(options[name] is not None for name in _OPTION_DESTINATIONS)
 
 
 def resolve_sensor_profile(args: argparse.Namespace) -> SiFiSensorProfile:
@@ -82,32 +82,61 @@ def resolve_sensor_profile(args: argparse.Namespace) -> SiFiSensorProfile:
         profile = load_sensor_profile(args.sensor_profile)
     else:
         profile = SENSOR_PRESETS[args.sensor_preset or "all"]
-    changes: dict[str, object] = {}
-    for name in ("ecg", "emg", "eda", "imu", "ppg"):
-        config = getattr(profile, name)
-        state = getattr(args, f"{name}_state")
-        rate = getattr(args, f"{name}_sample_rate", None)
-        updates: dict[str, object] = {}
-        if state is not None:
-            updates["enabled"] = state == "on"
-        if rate is not None:
-            updates["sample_rate_hz"] = rate
-        if updates:
-            changes[name] = replace(config, **updates)
-    ppg_updates: dict[str, object] = {}
-    if args.ppg_sps is not None:
-        ppg_updates["samples_per_second"] = args.ppg_sps
-    if args.ppg_avg is not None:
-        ppg_updates["averaging"] = args.ppg_avg
-    if ppg_updates:
-        changed_ppg = changes.get("ppg", profile.ppg)
-        assert isinstance(changed_ppg, PpgConfiguration)
-        changes["ppg"] = replace(changed_ppg, **ppg_updates)
-    if args.temperature_sample_rate is not None:
-        changes["temperature"] = replace(
-            profile.temperature, sample_rate_hz=args.temperature_sample_rate
-        )
-    return replace(profile, **changes)
+    return replace(
+        profile,
+        ecg=replace(
+            profile.ecg,
+            enabled=profile.ecg.enabled
+            if args.ecg_state is None
+            else args.ecg_state == "on",
+            sample_rate_hz=profile.ecg.sample_rate_hz
+            if args.ecg_sample_rate is None
+            else args.ecg_sample_rate,
+        ),
+        emg=replace(
+            profile.emg,
+            enabled=profile.emg.enabled
+            if args.emg_state is None
+            else args.emg_state == "on",
+            sample_rate_hz=profile.emg.sample_rate_hz
+            if args.emg_sample_rate is None
+            else args.emg_sample_rate,
+        ),
+        eda=replace(
+            profile.eda,
+            enabled=profile.eda.enabled
+            if args.eda_state is None
+            else args.eda_state == "on",
+            sample_rate_hz=profile.eda.sample_rate_hz
+            if args.eda_sample_rate is None
+            else args.eda_sample_rate,
+        ),
+        imu=replace(
+            profile.imu,
+            enabled=profile.imu.enabled
+            if args.imu_state is None
+            else args.imu_state == "on",
+            sample_rate_hz=profile.imu.sample_rate_hz
+            if args.imu_sample_rate is None
+            else args.imu_sample_rate,
+        ),
+        ppg=replace(
+            profile.ppg,
+            enabled=profile.ppg.enabled
+            if args.ppg_state is None
+            else args.ppg_state == "on",
+            samples_per_second=profile.ppg.samples_per_second
+            if args.ppg_sps is None
+            else args.ppg_sps,
+            averaging=profile.ppg.averaging if args.ppg_avg is None else args.ppg_avg,
+        ),
+        temperature=replace(
+            profile.temperature,
+            sample_rate_hz=profile.temperature.sample_rate_hz
+            if args.temperature_sample_rate is None
+            else args.temperature_sample_rate,
+        ),
+    )
 
 
 def sensor_profile_summary(profile: SiFiSensorProfile) -> dict[str, Scalar]:

@@ -96,6 +96,14 @@ class BackgroundHandle:
             return self
         self._process.start()
         logger.info("Started acquisition worker process (pid=%s)", self._process.pid)
+        try:
+            return self._attach_readers()
+        except BaseException:
+            self._shutdown()
+            raise
+
+    def _attach_readers(self) -> Self:
+        """Wait for startup and attach readers under the entry cleanup boundary."""
         ack = self._wait_ack(timeout=30)
         if isinstance(ack, Ready):
             self._streams, self._device_info = ack.streams, ack.device_info
@@ -110,8 +118,6 @@ class BackgroundHandle:
             self._entered = True
             logger.info("Acquisition worker ready with %d stream(s)", len(ack.streams))
             return self
-        self._process.terminate()
-        self._process.join()
         logger.error("Acquisition worker failed before becoming ready")
         if isinstance(ack, ErrorAck):
             raise AckError(f"Background process failed during startup: {ack.message}")
@@ -121,6 +127,10 @@ class BackgroundHandle:
         """Stop the worker and close all attached readers."""
         if not self._entered:
             return
+        self._shutdown()
+
+    def _shutdown(self) -> None:
+        """Release the started process and any readers, including partial entry."""
         try:
             self._cmd_queue.put(Shutdown())
             self._process.join(timeout=5)

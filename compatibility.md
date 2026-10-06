@@ -120,6 +120,11 @@ Downloaded bridge executables and generated comparison schemas in `bin`,
 `bin-tested`, `schemas`, and `schemas-old` are local inputs and are excluded
 from distribution archives.
 
+Runtime duration settings and timed captures reject non-finite values before
+acquisition starts. Partial foreground startup releases the worker and attached
+readers; interrupted bridge startup also runs teardown. These validation and
+ownership fixes leave the public API and schema-v2 capture records unchanged.
+
 Both capture launchers accept optional `--device-handle HANDLE`: a BLE name
 such as `BioPoint_AA92`, a MAC address on Windows/Linux, or a BLE UUID on macOS.
 Python callers pass `device_handle` to `SiFiBridgeDevice`, `create_sifi_capture`,
