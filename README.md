@@ -358,6 +358,70 @@ load reusable definitions; operators may adjust them for the current capture.
 Health thresholds remain editable while recording. A non-authoritative
 `.health.jsonl` sidecar is enabled by default and can be disabled.
 
+### Reusable annotation kinds
+
+Save the following as `kinds.json` (UTF-8), then pass it to
+`sifi-capture-web` with `--kinds-file kinds.json`:
+
+```json
+[
+  {
+    "target": "marker",
+    "kind": "Note",
+    "label": "Operator note",
+    "color": "#38BDF8",
+    "default_attributes": {"source": "operator"}
+  },
+  {
+    "target": "segment",
+    "kind": "Rest",
+    "label": "Rest interval",
+    "color": "#34D399",
+    "id_prefix": "rest",
+    "separator": "-",
+    "padding": 3,
+    "start": 1,
+    "default_attributes": {"condition": "rest", "seated": true}
+  }
+]
+```
+
+For a hardware-free example:
+
+```powershell
+uv run sifi-capture-web demo.capture.jsonl.zst --synthetic --kinds-file kinds.json
+```
+
+The top level is an array, with no wrapper object or schema-version field.
+Only `target` and `kind` are required for each entry; for example,
+`{"target": "marker", "kind": "Note"}` is a complete definition.
+
+| Field | Meaning and default |
+| --- | --- |
+| `target` | Required: `"marker"` for a point annotation or `"segment"` for a duration. |
+| `kind` | Required: non-empty category name with no leading or trailing whitespace. |
+| `label` | Optional display label; defaults to `null`. Does not change the recorded kind. |
+| `color` | Optional `"#RRGGBB"` display color; defaults to `null`. |
+| `id_prefix` | Generated ID prefix; omitted or `null` uses `kind`. An explicit prefix must be non-empty. |
+| `separator` | Text between prefix and counter; defaults to `"_"`, at most four characters (empty is allowed). |
+| `padding` | Minimum counter width, from 1 to 9; defaults to `2`. |
+| `start` | Non-negative starting counter; defaults to `1`. |
+| `default_attributes` | Scalar metadata copied onto each annotation; defaults to `{}`. |
+
+This example generates marker IDs `Note_01`, `Note_02`, etc. and segment IDs
+`rest-001`, `rest-002`, etc. Marker and segment IDs are tracked independently;
+generated IDs skip already-used IDs. Definitions are keyed by `(target, kind)`;
+a later definition with the same pair replaces the earlier one.
+
+Default attributes may contain strings, finite numbers, booleans, or `null`;
+nested objects and arrays are rejected. Attributes supplied for an individual
+annotation override matching defaults. Labels and colors are presentation
+settings; annotations record the kind, occurrence ID, and merged attributes.
+Dashboard edits apply to the current launch and do not rewrite `kinds.json`.
+
+Python launchers supply `definitions=` rather than a kinds-file path; see the
+[Python API example](api.md#reusable-annotation-kinds).
+
 Both capture CLIs configure console logging. The foreground, worker, bridge,
 recorder, annotations, shutdown, and health warning/recovery transitions are
 reported without logging raw packets or routine dashboard polling.

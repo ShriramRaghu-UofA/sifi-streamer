@@ -320,6 +320,72 @@ the definition is not an authoritative capture record.
 loopback-only dashboard. Downstream launchers retain dependency injection by
 supplying the runtime factory and a read-only scalar configuration summary.
 
+#### Reusable annotation kinds
+
+Pass a sequence of `AnnotationKindDefinition` objects through `definitions=`
+to `serve_capture_web` or `WebCaptureCoordinator`. The Python API accepts
+definitions directly; `--kinds-file` is a web CLI option. The
+[README kinds-file example](README.md#reusable-annotation-kinds) lists the
+equivalent JSON fields, defaults, and constraints.
+
+```python
+from pathlib import Path
+
+from sifi_streamer.sifi.composition import create_sifi_capture_runtime
+from sifi_streamer.web import (
+    AnnotationKindDefinition,
+    AnnotationTarget,
+    serve_capture_web,
+)
+
+
+def main() -> None:
+    output = Path("demo.capture.jsonl.zst")
+    definitions = (
+        AnnotationKindDefinition(
+            target=AnnotationTarget.MARKER,
+            kind="Note",
+            label="Operator note",
+            color="#38BDF8",
+            default_attributes={"source": "operator"},
+        ),
+        AnnotationKindDefinition(
+            target=AnnotationTarget.SEGMENT,
+            kind="Rest",
+            label="Rest interval",
+            color="#34D399",
+            id_prefix="rest",
+            separator="-",
+            padding=3,
+            start=1,
+            default_attributes={"condition": "rest", "seated": True},
+        ),
+    )
+    serve_capture_web(
+        output,
+        lambda capture_id, attributes, launch_configuration: (
+            create_sifi_capture_runtime(
+                output,
+                capture_id,
+                attributes,
+                synthetic=True,
+                launch_configuration=launch_configuration,
+            )
+        ),
+        definitions=definitions,
+    )
+
+
+if __name__ == "__main__":
+    main()
+```
+
+The main guard is required for spawned acquisition on Windows. Use a new output
+path for each launch. This example generates `Note_01` and `rest-001` as the
+first IDs. Per-annotation attributes override matching `default_attributes`.
+These shortcuts belong to the web layer; direct `CaptureController.add_marker`
+and `start_segment` calls still take explicit IDs, kinds, and attributes.
+
 ## Runners and interactive input
 
 `run_capture(controller, action)` owns startup and exactly one controlled close.
