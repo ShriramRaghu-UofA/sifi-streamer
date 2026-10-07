@@ -10,6 +10,7 @@
     metadataValid?: boolean;
   }>();
   let editable = $derived(dashboard.phase === 'setup');
+  let provenance = $derived(dashboard.live ?? dashboard.bootstrap);
   let configuration = $derived(dashboard.bootstrap?.configuration ?? {});
   let sensors: { id: string; label: string; rate: number; enabled: boolean }[] = $derived.by(() => {
     const configured = [
@@ -101,6 +102,28 @@
         {/if}
       {/each}
     </dl>
+    <div class="rounded-container border border-surface-200-800 p-4 space-y-3">
+      <h3 class="text-sm font-semibold">{editable ? 'Requested connection' : 'Reported device'}</h3>
+      {#if Object.keys(provenance?.device_summary ?? {}).length}
+        <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {#each Object.entries(provenance?.device_summary ?? {}) as [key, value] (key)}
+            <div class="min-w-0">
+              <dt class="field-hint">{key}</dt>
+              <dd class="mt-1 text-sm font-medium break-all">{value}</dd>
+            </div>
+          {/each}
+        </dl>
+      {:else if editable}
+        <p class="text-sm break-all">{configuration.device_handle ?? 'Automatic selection'}</p>
+        <p class="field-hint">Device identity will appear after connection.</p>
+      {:else}
+        <p class="muted text-sm">
+          {Object.keys(provenance?.device_info ?? {}).length
+            ? 'Device report available in details.'
+            : 'No device information reported.'}
+        </p>
+      {/if}
+    </div>
     <div class="space-y-3">
       <h3 class="text-sm font-semibold">Sensor streams</h3>
       <ul class="grid grid-cols-2 gap-3 sm:grid-cols-3" aria-label="Sensor streams">
@@ -153,6 +176,40 @@
               </div>{/each}
           </dl></Accordion.ItemContent
         >
+      </Accordion.Item>
+      <Accordion.Item value="device-info">
+        <Accordion.ItemTrigger
+          ><span>Device report</span><Accordion.ItemIndicator
+            ><ChevronDown size={17} /></Accordion.ItemIndicator
+          ></Accordion.ItemTrigger
+        >
+        <Accordion.ItemContent>
+          <pre
+            class="mt-3 whitespace-pre-wrap break-all rounded-container bg-surface-200-800 p-4 text-xs">{JSON.stringify(
+              provenance?.device_info ?? {},
+              null,
+              2,
+            )}</pre>
+        </Accordion.ItemContent>
+      </Accordion.Item>
+      <Accordion.Item value="launch-configuration">
+        <Accordion.ItemTrigger
+          ><span>Recorded launch configuration</span><Accordion.ItemIndicator
+            ><ChevronDown size={17} /></Accordion.ItemIndicator
+          ></Accordion.ItemTrigger
+        >
+        <Accordion.ItemContent>
+          {#if Object.keys(provenance?.launch_configuration ?? {}).length}
+            <pre
+              class="mt-3 whitespace-pre-wrap break-all rounded-container bg-surface-200-800 p-4 text-xs">{JSON.stringify(
+                provenance?.launch_configuration,
+                null,
+                2,
+              )}</pre>
+          {:else}
+            <p class="muted mt-3 text-sm">Recorded when capture startup begins.</p>
+          {/if}
+        </Accordion.ItemContent>
       </Accordion.Item>
     </Accordion>
     <div class="border-t border-surface-200-800 pt-5 text-sm space-y-2">

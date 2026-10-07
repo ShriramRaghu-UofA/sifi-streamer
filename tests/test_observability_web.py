@@ -89,6 +89,8 @@ class ObservabilityTests(unittest.TestCase):
     def test_startup_failure_returns_json_and_preserves_cause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Mock()
+            runtime.monitor.device_info = {}
+            runtime.monitor.launch_configuration = {}
 
             def fail():
                 try:
@@ -99,7 +101,7 @@ class ObservabilityTests(unittest.TestCase):
             runtime.controller.start.side_effect = fail
             coordinator = WebCaptureCoordinator(
                 Path(directory) / "failed.capture.jsonl.zst",
-                lambda capture_id, attributes: runtime,
+                lambda capture_id, attributes, configuration: runtime,
             )
             server = _WebServer(("127.0.0.1", 0), _Handler)
             server.coordinator = coordinator
@@ -196,7 +198,7 @@ class ObservabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "web.capture.jsonl.zst"
 
-            def factory(capture_id, attributes):
+            def factory(capture_id, attributes, configuration):
                 return create_sifi_capture_runtime(
                     output,
                     capture_id,

@@ -13,6 +13,7 @@ from sifi_streamer.acquisition.health import (
 from sifi_streamer.acquisition.ipc import StreamInfo
 from sifi_streamer.acquisition.reader import SignalWindow
 from sifi_streamer.capture.controller import CaptureController
+from sifi_streamer.capture.records import validate_document
 
 
 class AcquisitionMonitor:
@@ -27,6 +28,16 @@ class AcquisitionMonitor:
         self._evaluator = HealthEvaluator(thresholds)
         self._latest: HealthSnapshot | None = None
         self._streams_cache: tuple[StreamInfo, ...] = ()
+
+    @property
+    def device_info(self) -> dict[str, object]:
+        """Latest explicit report, retained after acquisition closes."""
+        return validate_document(self._handle.device_info)
+
+    @property
+    def launch_configuration(self) -> dict[str, object]:
+        """The complete settings passed to the authoritative recorder."""
+        return self._handle.launch_configuration
 
     @property
     def thresholds(self) -> HealthThresholds:

@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import asdict
 from pathlib import Path
 
 from sifi_streamer.acquisition.config import StreamerConfig
@@ -10,7 +11,14 @@ from sifi_streamer.acquisition.handle import BackgroundHandle
 from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.acquisition.runtime import AcquisitionMonitor, CaptureRuntime
 from sifi_streamer.capture.controller import CaptureController
-from sifi_streamer.capture.records import Attributes, Scalar, validate_attributes
+from sifi_streamer.capture.events import CaptureEvent
+from sifi_streamer.capture.records import (
+    Attributes,
+    Packet,
+    Scalar,
+    validate_attributes,
+    validate_document,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +34,7 @@ class AcquisitionCaptureBackend:
         capture_id: str,
         attributes: Attributes | None = None,
         *,
+        launch_configuration: Packet | None = None,
         handle_factory: Callable[
             [StreamerConfig, DeviceFactory], BackgroundHandle
         ] = BackgroundHandle,
@@ -35,6 +44,12 @@ class AcquisitionCaptureBackend:
             capture_file,
             capture_id,
             validate_attributes(attributes or {}),
+        )
+        self._launch_configuration = validate_document(
+            {
+                **dict(launch_configuration or {}),
+                "acquisition": asdict(config),
+            }
         )
         self._entered = self._capture_started = False
 
@@ -47,19 +62,15 @@ class AcquisitionCaptureBackend:
         """Enter the handle and start recording; repeated calls are safe."""
         if self._entered:
             return
+        self._handle.prepare_capture(
+            self._capture_file,
+            self._capture_id,
+            self._attributes,
+            self._launch_configuration,
+        )
         self._handle.__enter__()
-        self._entered = True
-        try:
-            self._handle.start_capture(
-                self._capture_file, self._capture_id, self._attributes
-            )
-            self._capture_started = True
-            logger.info("Authoritative capture started at %s", self._capture_file)
-        except BaseException:
-            logger.exception("Could not start capture at %s", self._capture_file)
-            self._entered = False
-            self._handle.__exit__(None, None, None)
-            raise
+        self._entered = self._capture_started = True
+        logger.info("Authoritative capture started at %s", self._capture_file)
 
     def stop(self, reason: str = "normal_completion") -> None:
         """Stop recording and always release the background handle."""
@@ -72,6 +83,10 @@ class AcquisitionCaptureBackend:
             if self._entered:
                 self._entered = False
                 self._handle.__exit__(None, None, None)
+
+    def record_event(self, event: CaptureEvent) -> None:
+        """Persist a report or diagnostic through the owned worker."""
+        self._handle.record_event(event)
 
     def start_segment(self, segment_id: str, kind: str, attributes: Attributes) -> None:
         self._handle.start_segment(segment_id, kind, dict(attributes))
@@ -91,6 +106,7 @@ def create_capture_runtime(
     *,
     config: StreamerConfig | None = None,
     thresholds: HealthThresholds | None = None,
+    launch_configuration: Packet | None = None,
 ) -> CaptureRuntime:
     """Compose an injected device with a capture controller and live monitor."""
     backend = AcquisitionCaptureBackend(
@@ -99,6 +115,7 @@ def create_capture_runtime(
         capture_file,
         capture_id,
         attributes,
+        launch_configuration=launch_configuration,
     )
     return CaptureRuntime(
         CaptureController(backend), AcquisitionMonitor(backend.handle, thresholds)

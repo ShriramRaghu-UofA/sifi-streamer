@@ -13,6 +13,8 @@ from sifi_streamer.capture import (
     CaptureLogWriter,
     CaptureStarted,
     CaptureStopped,
+    DeviceInfo,
+    LaunchConfiguration,
     Marker,
     RawPacket,
     SegmentStarted,
@@ -24,7 +26,7 @@ from sifi_streamer.capture import (
 
 
 class CaptureTests(unittest.TestCase):
-    def test_recorder_preserves_startup_device_info_as_first_raw_document(self) -> None:
+    def test_recorder_preserves_startup_device_info_as_typed_report(self) -> None:
         device_info: dict[str, object] = {
             "info": {
                 "id": "SB_3F4B",
@@ -41,15 +43,16 @@ class CaptureTests(unittest.TestCase):
             records = list(CaptureLogReader(path))
 
         self.assertIsInstance(records[0], CaptureStarted)
-        self.assertIsInstance(records[1], RawPacket)
-        startup_info = records[1]
-        assert isinstance(startup_info, RawPacket)
-        self.assertEqual(startup_info.packet, device_info)
-        self.assertIsInstance(records[2], CaptureStopped)
+        self.assertIsInstance(records[1], LaunchConfiguration)
+        startup_info = records[2]
+        self.assertIsInstance(startup_info, DeviceInfo)
+        assert isinstance(startup_info, DeviceInfo)
+        self.assertEqual(startup_info.info, device_info)
+        self.assertIsInstance(records[3], CaptureStopped)
 
     def test_each_wire_record_decodes_to_its_concrete_type(self) -> None:
         common = {
-            "schema_version": 2,
+            "schema_version": 3,
             "sequence": 0,
             "host_monotonic_ns": 1,
             "host_unix_ns": 2,
@@ -110,7 +113,7 @@ class CaptureTests(unittest.TestCase):
                 self.assertIs(type(decode_record(wire)), expected_type)
 
     def test_round_trip_and_marker_order(self) -> None:
-        marker = Marker(2, 4, 5, 6, "occurrence-1", "button", {"ok": True}, None, None)
+        marker = Marker(3, 4, 5, 6, "occurrence-1", "button", {"ok": True}, None, None)
         self.assertEqual(decode_record(json.loads(encode_record(marker))), marker)
         wire = json.loads(encode_record(marker))
         self.assertEqual(wire["marker_id"], "occurrence-1")
@@ -129,11 +132,11 @@ class CaptureTests(unittest.TestCase):
             raw = next(record for record in records if isinstance(record, RawPacket))
             self.assertEqual(raw.packet, document)
 
-    def test_reader_decodes_source_compatible_wire_records(self) -> None:
-        """Representative records are byte-shaped like both source implementations."""
+    def test_reader_decodes_representative_wire_records(self) -> None:
+        """Representative records retain their complete vendor payloads."""
         values = [
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "sequence": 0,
                 "host_monotonic_ns": 1,
                 "host_unix_ns": 2,
@@ -142,7 +145,7 @@ class CaptureTests(unittest.TestCase):
                 "attributes": {},
             },
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "sequence": 1,
                 "host_monotonic_ns": 3,
                 "host_unix_ns": 4,
@@ -154,7 +157,7 @@ class CaptureTests(unittest.TestCase):
                 "source_clock": None,
             },
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "sequence": 2,
                 "host_monotonic_ns": 5,
                 "host_unix_ns": 6,

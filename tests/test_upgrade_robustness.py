@@ -117,8 +117,8 @@ class UpgradeRobustnessTests(unittest.TestCase):
                     for record in CaptureLogReader(path)
                     if isinstance(record, RawPacket)
                 ]
-                self.assertEqual(len(packets), 2)
-                self.assertEqual(packets[1]["extension"], {"value": 1})
+                self.assertEqual(len(packets), 1)
+                self.assertEqual(packets[0]["extension"], {"value": 1})
             recorder.on_packet(
                 SiFiPacket(
                     "start_time",
@@ -145,9 +145,7 @@ class UpgradeRobustnessTests(unittest.TestCase):
                 for record in CaptureLogReader(path)
                 if isinstance(record, RawPacket)
             ]
-            self.assertEqual(
-                [packet.get("start_time") for packet in packets], [None, 2, 3]
-            )
+            self.assertEqual([packet.get("start_time") for packet in packets], [2, 3])
 
     def test_biopoint_registry_and_packet_use_single_emg_channel(self) -> None:
         modalities = modalities_from_device_info(

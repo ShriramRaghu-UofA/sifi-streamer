@@ -207,7 +207,7 @@ class MyoDevice:
     def read_packet(self) -> "MyoPacket": ...
 
     @property
-    def device_info(self) -> dict[str, object] | None: ...
+    def device_info(self) -> dict[str, object]: ...
 
 
 runtime = create_capture_runtime(
@@ -383,10 +383,10 @@ reads return source timestamps, native values, and an explicit validity mask.
 `SyntheticSiFiDevice` uses the same generic worker and shared-memory path as
 hardware and custom injected devices.
 
-The `.capture.jsonl.zst` file is authoritative, append-only schema-v2 JSONL in
+The `.capture.jsonl.zst` file is authoritative, append-only schema-v3 JSONL in
 concatenated Zstandard frames. New files use exclusive creation and are never
 rewritten. When supplied by the connected device, its complete startup-info
-document is preserved as the first raw packet after capture start; for SiFi
+document is preserved in an explicit `device_info` record; for SiFi
 hardware this includes the bridge-reported firmware, configuration, and sample
 rates.
 
@@ -435,3 +435,53 @@ or `create_sifi_capture_runtime`. Omission retains first-matching-device
 selection. A supplied handle is sent as `connect HANDLE`; bridge errors abort
 startup without falling back to automatic selection. Synthetic capture rejects
 this option. Capture records are unchanged.
+
+## Capture provenance and diagnostics (schema 3)
+
+A composed capture starts before hardware connection. Its first records are
+`capture_started` and `launch_configuration`, containing resolved integration and
+acquisition settings. The web launcher also includes health rules and annotation
+configuration; the standalone launcher records its mode and requested duration.
+Failed hardware startup leaves a readable capture with the requested settings,
+available reports, a `diagnostic`, and `capture_stopped` (`startup_failure`).
+
+Device metadata is an explicit `device_info` record with `stage` and `info`.
+SiFi records reports at `before_configuration`, `after_configuration`, and
+`after_start`. Device reports and raw packets preserve the parsed vendor JSON
+without modifying its contents. `{}` is an explicit empty report; no event means
+no record. Packet `capture_document()` may still return `None` to omit a document.
+
+Third-party integrations return a JSON object from `device_info`. To emit staged
+or during-capture reports, structurally implement
+`CaptureEventSource.set_capture_event_sink(sink)` and call the supplied sink:
+
+```python
+from dataclasses import asdict
+from sifi_streamer.capture import DeviceInfoEvent, DiagnosticEvent
+
+# Inside the integration, after receiving an explicit report:
+sink(DeviceInfoEvent("during_capture", asdict(my_report)))
+sink(
+    DiagnosticEvent(
+        "warning",
+        "my-device",
+        "during_capture",
+        "quality",
+        "Check sensor placement",
+        {},
+    )
+)
+```
+
+Keep dataclasses and payload schemas in the integration. Supply finite JSON
+objects; nested objects and lists are supported. Consumer code can similarly call
+`controller.record_event(DiagnosticEvent(...))` while the controller is started.
+Severity (`info`, `warning`, `error`) describes the event and does not itself stop
+recording. Periodic health snapshots and routine Python logs remain separate.
+
+The dashboard shows the requested device selection before startup and reported
+SiFi identity afterward. Expand Device report or Recorded launch configuration to
+inspect the complete JSON. Reported metadata remains available after stopping.
+
+Schema 3 intentionally breaks the earlier wire format before v1. See
+[compatibility.md](compatibility.md) for API changes and migration details.

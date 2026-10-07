@@ -94,6 +94,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         transport=args.transport,
         sensor_profile=sensor_profile,
         synthetic=args.synthetic,
+        launch_configuration={
+            "launcher": {
+                "mode": "interactive"
+                if args.interactive
+                else "timed"
+                if args.duration is not None
+                else "until_interrupt",
+                "duration_seconds": args.duration,
+                "output": str(args.output),
+            }
+        },
     )
     if args.interactive:
         reason = run_interactive_capture(controller)

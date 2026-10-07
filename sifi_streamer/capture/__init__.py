@@ -5,6 +5,7 @@ from sifi_streamer.capture.controller import (
     CaptureController,
     NoCaptureController,
 )
+from sifi_streamer.capture.events import CaptureEvent, DeviceInfoEvent, DiagnosticEvent
 from sifi_streamer.capture.records import (
     Attributes,
     CaptureDecodeError,
@@ -15,6 +16,10 @@ from sifi_streamer.capture.records import (
     CaptureRecord,
     CaptureStarted,
     CaptureStopped,
+    DeviceInfo,
+    Diagnostic,
+    DiagnosticSeverity,
+    LaunchConfiguration,
     Marker,
     RawPacket,
     Scalar,
@@ -24,6 +29,7 @@ from sifi_streamer.capture.records import (
     encode_record,
     record_to_wire_map,
     validate_attributes,
+    validate_document,
 )
 from sifi_streamer.capture.runners import (
     interactive_annotations,
@@ -41,12 +47,19 @@ __all__ = [
     "CaptureController",
     "CaptureDecodeError",
     "CaptureError",
+    "CaptureEvent",
     "CaptureLifecycleError",
     "CaptureLogReader",
     "CaptureLogWriter",
     "CaptureRecord",
     "CaptureStarted",
     "CaptureStopped",
+    "DeviceInfo",
+    "DeviceInfoEvent",
+    "Diagnostic",
+    "DiagnosticEvent",
+    "DiagnosticSeverity",
+    "LaunchConfiguration",
     "Marker",
     "NoCaptureController",
     "RawPacket",
@@ -64,4 +77,5 @@ __all__ = [
     "run_timed_capture",
     "run_until_interrupt",
     "validate_attributes",
+    "validate_document",
 ]

@@ -18,6 +18,9 @@ class Backend:
         self.marker_attributes: dict[str, Scalar] | None = None
         self.fail_start = fail_start
 
+    def record_event(self, event) -> None:
+        self.events.append(event)
+
     def start(self) -> None:
         self.events.append(("start", None))
         if self.fail_start:

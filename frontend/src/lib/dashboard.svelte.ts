@@ -96,6 +96,9 @@ export class Dashboard {
             kinds: bootstrap.kinds,
             thresholds: bootstrap.thresholds,
             active_segments: bootstrap.active_segments,
+            device_info: bootstrap.device_info,
+            device_summary: bootstrap.device_summary,
+            launch_configuration: bootstrap.launch_configuration,
           };
         this.toaster.success({
           title: success,

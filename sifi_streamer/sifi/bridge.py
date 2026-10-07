@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from sifi_streamer.acquisition.devices import SignalStreamSpec
+from sifi_streamer.capture.events import CaptureEventSink, DeviceInfoEvent
 from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi.devices import (
     Modalities,
@@ -181,7 +182,8 @@ class SiFiBridgeDevice:
         self._stderr_lines: deque[str] = deque(maxlen=50)
         self._reader: PacketReader | None = None
         self._modalities: Modalities[ModalitySpec] | None = None
-        self._device_info: dict[str, object] | None = None
+        self._device_info: dict[str, object] = {}
+        self._event_sink: CaptureEventSink | None = None
 
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
@@ -200,9 +202,17 @@ class SiFiBridgeDevice:
         return streams_from_modalities(self.modalities)
 
     @property
-    def device_info(self) -> dict[str, object] | None:
+    def device_info(self) -> dict[str, object]:
         """Return the complete bridge info document, if connection supplied one."""
         return self._device_info
+
+    def set_capture_event_sink(self, sink: CaptureEventSink) -> None:
+        """Install the worker-owned sink for explicit bridge info reports."""
+        self._event_sink = sink
+
+    def _report_info(self, stage: str) -> None:
+        if self._event_sink is not None:
+            self._event_sink(DeviceInfoEvent(stage, self._device_info))
 
     def connect(self) -> None:
         """Launch and configure the bridge, then connect its packet reader.
@@ -248,6 +258,7 @@ class SiFiBridgeDevice:
             self._wait_for_response("connect")
             self._send("info")
             self._device_info = self._wait_for_info()
+            self._report_info("before_configuration")
             available_sensors = self._validate_sensor_capabilities()
             for command in bridge_configuration_commands(self._sensor_profile):
                 sensor = command.split()[1]
@@ -257,6 +268,7 @@ class SiFiBridgeDevice:
                 self._wait_for_response("configure")
             self._send("info")
             self._device_info = self._wait_for_info()
+            self._report_info("after_configuration")
             self._validate_sensor_capabilities()
             self._modalities = modalities_from_device_info(self._device_info)
             self._validate_configured_modalities()
@@ -268,6 +280,7 @@ class SiFiBridgeDevice:
             self._wait_for_response("start")
             self._send("info")
             self._device_info = self._wait_for_info()
+            self._report_info("after_start")
             self._validate_sensor_capabilities()
             self._modalities = modalities_from_device_info(self._device_info)
             self._validate_configured_modalities()
@@ -279,7 +292,7 @@ class SiFiBridgeDevice:
 
     def _validate_sensor_capabilities(self) -> dict[str, bool]:
         """Reject unavailable requested sensors and the old live info layout."""
-        if self._device_info is None:
+        if not self._device_info:
             raise DeviceError("Bridge device info is unavailable")
         root = self._device_info.get("info")
         if not isinstance(root, dict) or not isinstance(

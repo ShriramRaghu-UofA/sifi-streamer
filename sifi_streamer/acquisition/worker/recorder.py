@@ -7,7 +7,18 @@ from pathlib import Path
 
 from sifi_streamer.acquisition.config import StreamerConfig
 from sifi_streamer.acquisition.devices import AcquisitionPacket, CaptureContextPacket
-from sifi_streamer.capture.records import Attributes, CaptureLogWriter
+from sifi_streamer.capture.events import (
+    CaptureEvent,
+    DeviceInfoEvent,
+    DiagnosticEvent,
+    copy_event,
+)
+from sifi_streamer.capture.records import (
+    Attributes,
+    CaptureLogWriter,
+    Packet,
+    validate_document,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +38,31 @@ class RecorderFSM:
     def __init__(
         self, config: StreamerConfig, device_info: dict[str, object] | None
     ) -> None:
-        self._config, self._device_info, self._lock, self._writer = (
+        self._config, self._lock, self._writer = (
             config,
-            device_info,
             threading.Lock(),
             None,
         )
+        self._pending_events: list[CaptureEvent] = []
+        self._latest_report: DeviceInfoEvent | None = None
+        if device_info is not None:
+            self._latest_report = DeviceInfoEvent(
+                "after_start", validate_document(device_info)
+            )
         self._context_documents: dict[str, dict[str, object]] = {}
 
+    @property
+    def active(self) -> bool:
+        """Whether an authoritative writer is currently open."""
+        with self._lock:
+            return self._writer is not None
+
     def start_capture(
-        self, capture_file: Path, capture_id: str, attributes: Attributes | None = None
+        self,
+        capture_file: Path,
+        capture_id: str,
+        attributes: Attributes | None = None,
+        configuration: Packet | None = None,
     ) -> None:
         """Create the authoritative writer if recording is enabled and inactive."""
         with self._lock:
@@ -44,7 +70,9 @@ class RecorderFSM:
                 raise RuntimeError("capture is already active")
             if not self._config.capture_log_enabled:
                 raise RuntimeError("capture logging is disabled")
-            # Device info remains in raw packet documents; attributes stay scalar.
+            configuration = validate_document(
+                configuration if configuration is not None else {}
+            )
             self._writer = CaptureLogWriter(
                 capture_file,
                 capture_id,
@@ -54,11 +82,19 @@ class RecorderFSM:
                 compression_level=self._config.capture_compression_level,
                 fsync_on_boundary=self._config.capture_fsync_on_boundary,
             )
-            if self._device_info is not None:
-                # The bridge info response is itself a complete raw device
-                # document. Preserve it in the authoritative stream before any
-                # acquired packets without changing the schema-v2 vocabulary.
-                self._writer.append_packet(self._device_info)
+            self._writer.append_launch_configuration(configuration)
+            if (
+                not any(
+                    isinstance(event, DeviceInfoEvent) for event in self._pending_events
+                )
+                and self._latest_report is not None
+            ):
+                self._writer.append_device_info(
+                    self._latest_report.stage, self._latest_report.info
+                )
+            for event in self._pending_events:
+                self._write_event(event)
+            self._pending_events.clear()
             for document in self._context_documents.values():
                 self._writer.append_packet(document)
             logger.info(
@@ -117,6 +153,33 @@ class RecorderFSM:
                 source_clock=source_clock,
             )
             logger.info("Wrote marker %r (kind %r)", marker_id, kind)
+
+    def _write_event(self, event: CaptureEvent) -> None:
+        if self._writer is None:
+            raise RuntimeError("capture is not active")
+        match event:
+            case DeviceInfoEvent():
+                self._writer.append_device_info(event.stage, event.info)
+            case DiagnosticEvent():
+                self._writer.append_diagnostic(
+                    event.severity,
+                    event.source,
+                    event.stage,
+                    event.code,
+                    event.message,
+                    event.details,
+                )
+
+    def record_event(self, event: CaptureEvent) -> None:
+        """Record explicit events or retain pre-capture events for delayed capture."""
+        event = copy_event(event)
+        with self._lock:
+            if isinstance(event, DeviceInfoEvent):
+                self._latest_report = event
+            if self._writer is None:
+                self._pending_events.append(event)
+            else:
+                self._write_event(event)
 
     def on_packet(self, packet: AcquisitionPacket) -> None:
         """Append a complete packet document when capture is active."""

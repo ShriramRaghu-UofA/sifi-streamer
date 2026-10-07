@@ -18,6 +18,9 @@ class Backend:
     def __init__(self) -> None:
         self.events = []
 
+    def record_event(self, event) -> None:
+        self.events.append(event)
+
     def start(self) -> None:
         self.events.append("start")
 

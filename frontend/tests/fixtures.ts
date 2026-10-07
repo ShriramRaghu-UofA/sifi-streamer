@@ -5,6 +5,9 @@ import { defaultThresholds } from '../src/lib/types';
 export function bootstrap(): Bootstrap {
   return {
     state: 'setup',
+    device_info: {},
+    device_summary: {},
+    launch_configuration: {},
     error: null,
     output: 'C:\\captures\\pilot.capture.jsonl.zst',
     configuration: {
@@ -108,6 +111,9 @@ export async function mockSession(page: Page) {
         const start = count++ * 100;
         response = {
           state: session.state,
+          device_info: session.device_info,
+          device_summary: session.device_summary,
+          launch_configuration: session.launch_configuration,
           error: null,
           health: health(count),
           active_segments: session.active_segments,

@@ -216,10 +216,10 @@ class SiFiExportTests(unittest.TestCase):
     ) -> None:
         host_time = 8_000_000_000_000_001
         records = (
-            CaptureStarted(2, 0, host_time, host_time + 1, "crash", {}),
-            SegmentStarted(2, 1, host_time + 2, host_time + 3, "phase", "kind", {}),
+            CaptureStarted(3, 0, host_time, host_time + 1, "crash", {}),
+            SegmentStarted(3, 1, host_time + 2, host_time + 3, "phase", "kind", {}),
             RawPacket(
-                2,
+                3,
                 2,
                 host_time + 4,
                 host_time + 5,

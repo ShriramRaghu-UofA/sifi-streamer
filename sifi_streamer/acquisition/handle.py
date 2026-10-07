@@ -12,7 +12,9 @@ from sifi_streamer.acquisition.config import StreamerConfig
 from sifi_streamer.acquisition.devices import DeviceFactory
 from sifi_streamer.acquisition.health import RawHealthSnapshot, WorkerFatal
 from sifi_streamer.acquisition.ipc import (
+    AddCaptureEvent,
     AddMarker,
+    CaptureEventAdded,
     CaptureStarted,
     CaptureStopped,
     ErrorAck,
@@ -29,7 +31,8 @@ from sifi_streamer.acquisition.ipc import (
 )
 from sifi_streamer.acquisition.reader import SharedMemoryReader
 from sifi_streamer.acquisition.worker.process import background_main
-from sifi_streamer.capture.records import Attributes
+from sifi_streamer.capture.events import CaptureEvent
+from sifi_streamer.capture.records import Attributes, Packet, validate_document
 from sifi_streamer.exceptions import AckError, AckTimeoutError, RecordingError
 
 logger = logging.getLogger(__name__)
@@ -61,25 +64,30 @@ class BackgroundHandle:
         self._cmd_queue: Queue = context.Queue()
         self._ack_queue: Queue = context.Queue()
         self._health_queue: Queue = context.Queue(maxsize=1)
+        self._device_info_queue: Queue = context.Queue()
+        self._startup_capture: StartCapture | None = None
         self._fatal_queue: Queue = context.Queue()
+        self._process_kwargs: dict[str, object] = {
+            "config": config,
+            "device_factory": device_factory,
+            "cmd_queue": self._cmd_queue,
+            "ack_queue": self._ack_queue,
+            "health_queue": self._health_queue,
+            "fatal_queue": self._fatal_queue,
+            "device_info_queue": self._device_info_queue,
+            "shm_prefix": f"acq_{uuid.uuid4().hex[:12]}",
+            "log_level": background_log_level,
+        }
         self._process = context.Process(
             target=background_main,
-            kwargs={
-                "config": config,
-                "device_factory": device_factory,
-                "cmd_queue": self._cmd_queue,
-                "ack_queue": self._ack_queue,
-                "health_queue": self._health_queue,
-                "fatal_queue": self._fatal_queue,
-                "shm_prefix": f"acq_{uuid.uuid4().hex[:12]}",
-                "log_level": background_log_level,
-            },
+            kwargs=self._process_kwargs,
             daemon=True,
             name="acquisition-worker",
         )
         self._stream_readers: dict[str, SharedMemoryReader] = {}
         self._streams: tuple[StreamInfo, ...] = ()
-        self._device_info: dict[str, object] | None = None
+        self._device_info: dict[str, object] = {}
+        self._device_info_revision = 0
         self._entered = False
 
     def __enter__(self) -> Self:
@@ -94,6 +102,14 @@ class BackgroundHandle:
         """
         if self._entered:
             return self
+        if self._startup_capture is not None:
+            self._process_kwargs["startup_capture"] = self._startup_capture
+            self._process = multiprocessing.get_context("spawn").Process(
+                target=background_main,
+                kwargs=self._process_kwargs,
+                daemon=True,
+                name="acquisition-worker",
+            )
         self._process.start()
         logger.info("Started acquisition worker process (pid=%s)", self._process.pid)
         try:
@@ -107,6 +123,7 @@ class BackgroundHandle:
         ack = self._wait_ack(timeout=30)
         if isinstance(ack, Ready):
             self._streams, self._device_info = ack.streams, ack.device_info
+            self._device_info_revision = ack.device_info_revision
             for info in ack.streams:
                 reader = SharedMemoryReader(
                     info.shm_name,
@@ -146,12 +163,10 @@ class BackgroundHandle:
             (
                 self._stream_readers,
                 self._streams,
-                self._device_info,
                 self._entered,
             ) = (
                 {},
                 (),
-                None,
                 False,
             )
             logger.info("Acquisition worker and shared-memory readers closed")
@@ -189,9 +204,48 @@ class BackgroundHandle:
             return None
 
     @property
-    def device_info(self) -> dict[str, object] | None:
-        """Return optional device metadata published during worker startup."""
-        return self._device_info
+    def device_info(self) -> dict[str, object]:
+        """Return a defensive snapshot of the latest explicit device report."""
+        while True:
+            try:
+                update = self._device_info_queue.get_nowait()
+                if update.revision > self._device_info_revision:
+                    self._device_info = update.info
+                    self._device_info_revision = update.revision
+            except queue.Empty:
+                return validate_document(self._device_info)
+
+    @property
+    def launch_configuration(self) -> dict[str, object]:
+        """Resolved settings supplied to the worker, retained after closure."""
+        return validate_document(
+            self._startup_capture.configuration
+            if self._startup_capture is not None
+            else {}
+        )
+
+    def prepare_capture(
+        self,
+        capture_file: Path,
+        capture_id: str,
+        attributes: Attributes,
+        configuration: Packet,
+    ) -> None:
+        """Arrange worker-owned recording before hardware startup."""
+        if self._entered or self._process.pid is not None:
+            raise RuntimeError("capture must be prepared before worker startup")
+        self._startup_capture = StartCapture(
+            capture_file, capture_id, dict(attributes), validate_document(configuration)
+        )
+
+    def record_event(self, event: CaptureEvent) -> None:
+        """Persist an explicit event and wait for acknowledgement."""
+        if not self._entered:
+            raise RuntimeError("capture events require an entered handle")
+        from sifi_streamer.capture.events import copy_event
+
+        self._cmd_queue.put(AddCaptureEvent(copy_event(event)))
+        self._expect(CaptureEventAdded, "record_event")
 
     def start_capture(
         self, capture_file: Path, capture_id: str, attributes: Attributes | None = None

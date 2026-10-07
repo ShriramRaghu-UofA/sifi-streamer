@@ -18,7 +18,13 @@ from urllib.parse import urlsplit
 
 from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.acquisition.runtime import CaptureRuntime
-from sifi_streamer.capture.records import Attributes, Scalar, validate_attributes
+from sifi_streamer.capture.records import (
+    Attributes,
+    Packet,
+    Scalar,
+    validate_attributes,
+    validate_document,
+)
 from sifi_streamer.exceptions import StreamerError
 from sifi_streamer.web.annotations import (
     AnnotationKindDefinition,
@@ -27,7 +33,7 @@ from sifi_streamer.web.annotations import (
 )
 from sifi_streamer.web.health_log import HealthLogWriter, default_health_path
 
-type RuntimeFactory = Callable[[str, Attributes], CaptureRuntime]
+type RuntimeFactory = Callable[[str, Attributes, Packet], CaptureRuntime]
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +74,12 @@ class WebCaptureCoordinator:
         thresholds: HealthThresholds | None = None,
         definitions: Sequence[AnnotationKindDefinition] = (),
         health_log_enabled: bool = True,
+        device_info_formatter: Callable[[Packet], Attributes] | None = None,
     ) -> None:
+        self._device_info_formatter = device_info_formatter
+        self._device_info: dict[str, object] = {}
+        self._device_summary: dict[str, Scalar] = {}
+        self._launch_configuration: dict[str, object] = {}
         self.output = output
         self._factory = runtime_factory
         self._configuration = validate_attributes(configuration_summary or {})
@@ -95,6 +106,7 @@ class WebCaptureCoordinator:
                 "error": self._error,
                 "output": str(self.output),
                 "configuration": self._configuration,
+                **self._provenance(),
                 "default_capture_id": self.default_capture_id,
                 "default_attributes": self.default_attributes,
                 "thresholds": _wire(self._thresholds),
@@ -134,7 +146,17 @@ class WebCaptureCoordinator:
             logger.info("Starting capture %r at %s", capture_id, self.output)
             runtime: CaptureRuntime | None = None
             try:
-                runtime = self._factory(capture_id, values)
+                self._launch_configuration = validate_document(
+                    {
+                        "requested": self._configuration,
+                        "web": {
+                            "thresholds": _wire(thresholds or self._thresholds),
+                            "health_log_enabled": enabled,
+                            "kinds": _wire(self._kinds.definitions),
+                        },
+                    }
+                )
+                runtime = self._factory(capture_id, values, self._launch_configuration)
                 if thresholds is not None:
                     self._thresholds = thresholds
                 runtime.monitor.update_thresholds(self._thresholds)
@@ -157,6 +179,12 @@ class WebCaptureCoordinator:
                 self._state = "failed"
                 try:
                     if runtime is not None:
+                        self._device_info = validate_document(
+                            runtime.monitor.device_info
+                        )
+                        self._launch_configuration = validate_document(
+                            runtime.monitor.launch_configuration
+                        )
                         runtime.controller.close("startup_failure")
                 finally:
                     if self._health_log is not None:
@@ -227,6 +255,7 @@ class WebCaptureCoordinator:
         self._stop_monitor.set()
         try:
             if self._runtime is not None:
+                self._provenance()
                 self._runtime.controller.close(reason)
         finally:
             if self._health_log is not None:
@@ -357,10 +386,27 @@ class WebCaptureCoordinator:
                     self._runtime.monitor.events if self._runtime is not None else ()
                 ),
                 "batches": batches,
+                **self._provenance(),
                 "active_segments": list(self._active_segments),
                 "thresholds": _wire(self._thresholds),
                 "kinds": _wire(self._kinds.definitions),
             }
+
+    def _provenance(self) -> dict[str, object]:
+        if self._runtime is not None:
+            self._device_info = validate_document(self._runtime.monitor.device_info)
+            self._launch_configuration = validate_document(
+                self._runtime.monitor.launch_configuration
+            )
+        if self._device_info_formatter is not None:
+            self._device_summary = validate_attributes(
+                self._device_info_formatter(self._device_info)
+            )
+        return {
+            "device_info": self._device_info,
+            "device_summary": self._device_summary,
+            "launch_configuration": self._launch_configuration,
+        }
 
     def _streams(self) -> list[object]:
         if self._runtime is None or self._state == "setup":
@@ -558,6 +604,7 @@ def serve_capture_web(
     health_log_enabled: bool = True,
     port: int = 0,
     open_browser: bool = True,
+    device_info_formatter: Callable[[Packet], Attributes] | None = None,
 ) -> None:
     """Serve one local dashboard and close an active capture on Ctrl+C."""
     coordinator = WebCaptureCoordinator(
@@ -569,6 +616,7 @@ def serve_capture_web(
         thresholds=thresholds,
         definitions=definitions,
         health_log_enabled=health_log_enabled,
+        device_info_formatter=device_info_formatter,
     )
     token = secrets.token_urlsafe(24)
     server = _WebServer(("127.0.0.1", port), _Handler)

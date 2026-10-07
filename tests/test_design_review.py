@@ -26,7 +26,7 @@ from sifi_streamer.sifi.sensor_profile import sensor_profile_from_dict
 class DesignReviewTests(unittest.TestCase):
     def test_backend_interrupted_start_releases_handle(self) -> None:
         handle = MagicMock()
-        handle.start_capture.side_effect = KeyboardInterrupt
+        handle.__enter__.side_effect = KeyboardInterrupt
         backend = AcquisitionCaptureBackend(
             StreamerConfig(),
             SyntheticSiFiDevice,
@@ -37,7 +37,7 @@ class DesignReviewTests(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             backend.start()
         backend.stop()
-        handle.__exit__.assert_called_once()
+        handle.__exit__.assert_not_called()
 
     def test_udp_reader_failure_runs_bridge_cleanup(self) -> None:
         reader = Mock()
@@ -142,7 +142,7 @@ class DesignReviewTests(unittest.TestCase):
                 StreamInfo(name, name, 16, ("value",), 10, "<f4")
                 for name in ("first", "second")
             ),
-            None,
+            {},
         )
         with (
             patch(

@@ -56,7 +56,7 @@ CaptureController -> CaptureBackend protocol -> AcquisitionCaptureBackend
 Package behavior understands only:
 
 - a capture/session;
-- raw packets;
+- raw packets, launch configuration, device reports, and diagnostics;
 - segments representing durations;
 - markers representing point facts;
 - IDs, kinds, reasons, timestamps, and scalar attributes.
@@ -107,12 +107,10 @@ cross-process boundaries. Never use mutable default arguments.
 
 `*.capture.jsonl.zst` is authoritative and append-only.
 
-- Preserve schema version 2 record names, fields, and meanings unless a schema
-  correction is explicitly approved and documented with compatibility tests.
+- Current capture schema is version 3. Pre-v1 breaking changes are permitted
+  when explicitly requested and documented with regression tests.
 - Never rewrite an existing capture. Writers use exclusive creation.
 - Never make CSV or Parquet authoritative.
-- Readers must decode existing compatible captures from both source projects.
-- Existing readers must decode newly written compatible captures.
 - Preserve lifecycle validation, sequence validation, finite JSON values, and
   newline-terminated JSONL records.
 - Preserve complete raw packet documents, including unknown device fields.
@@ -237,7 +235,7 @@ coverage for:
 - supported and invalid EMG rates;
 - interactive parsing and CLI mode conflicts;
 - controlled Ctrl+C shutdown where practical;
-- old-reader/new-writer and representative old-wire/new-reader compatibility.
+- provenance payload preservation, staged reports, and failure diagnostics.
 
 Before handoff, run:
 
@@ -266,9 +264,7 @@ confirm:
   consumer repository on `sys.path`;
 - `sifi-capture --help` succeeds;
 - a short synthetic capture can be written and read back;
-- representative compatible captures decode without mutation;
-- unchanged readers from both source repositories can read new captures when
-  those repositories are available locally.
+- representative current-schema captures decode without mutation.
 
 ## Documentation and migration
 

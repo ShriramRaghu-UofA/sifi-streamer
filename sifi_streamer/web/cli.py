@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from sifi_streamer.acquisition.health import HealthThresholds
+from sifi_streamer.capture.records import Packet, Scalar
 from sifi_streamer.capture.runners import parse_attributes
 from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE, BridgeTransport
 from sifi_streamer.sifi.cli.sensor_options import (
@@ -18,6 +19,24 @@ from sifi_streamer.sifi.cli.sensor_options import (
 from sifi_streamer.sifi.composition import create_sifi_capture_runtime
 from sifi_streamer.web.annotations import AnnotationKindDefinition
 from sifi_streamer.web.coordinator import _kind, serve_capture_web
+
+
+def sifi_device_summary(document: Packet) -> dict[str, Scalar]:
+    """Extract display fields while leaving the authoritative report untouched."""
+    info = document.get("info", {})
+    if not isinstance(info, dict):
+        return {}
+    return {
+        label: value
+        for key, label in (
+            ("device", "Model"),
+            ("name", "Name"),
+            ("mac", "MAC address"),
+            ("id", "Device ID"),
+            ("firmware_version", "Firmware"),
+        )
+        if isinstance(value := info.get(key), str)
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -100,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
 
-    def factory(capture_id: str, capture_attributes):
+    def factory(capture_id: str, capture_attributes, launch_configuration):
         return create_sifi_capture_runtime(
             args.output,
             capture_id,
@@ -113,6 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sensor_profile=sensor_profile,
             synthetic=args.synthetic,
             thresholds=thresholds,
+            launch_configuration=launch_configuration,
         )
 
     configuration_summary = {
@@ -121,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "host": args.host,
         "port": args.port,
         "transport": str(args.transport),
+        "device_handle": args.device_handle,
     }
     if sensor_profile is not None:
         configuration_summary.update(sensor_profile_summary(sensor_profile))
@@ -128,6 +149,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.output,
         factory,
         configuration_summary=configuration_summary,
+        device_info_formatter=sifi_device_summary,
         default_capture_id=args.capture_id,
         default_attributes=attributes,
         thresholds=thresholds,

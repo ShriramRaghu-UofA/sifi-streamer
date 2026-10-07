@@ -1,6 +1,6 @@
 """Read and write authoritative device-neutral capture logs.
 
-Capture files contain newline-terminated schema-version-2 JSON records in one
+Capture files contain newline-terminated schema-version-3 JSON records in one
 or more concatenated Zstandard frames.  Writers create files exclusively and
 append records; readers never repair or mutate a capture.  This module also
 defines the device-neutral record model used by the rest of the package.
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Self
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 type Scalar = str | int | float | bool | None
 type Attributes = Mapping[str, Scalar]
 type Packet = Mapping[str, object]
@@ -44,7 +44,7 @@ class _Record:
     """Fields common to every wire record.
 
     Attributes:
-        schema_version: Capture schema version.  Version 2 is currently supported.
+        schema_version: Capture schema version.  Version 3 is currently supported.
         sequence: Zero-based position of the record in its capture.
         host_monotonic_ns: Host monotonic-clock time when the record was created.
         host_unix_ns: Host Unix-epoch time in nanoseconds.
@@ -67,6 +67,39 @@ class RawPacket(_Record):
 
     packet: Packet
     record_type: Literal["raw_packet"] = "raw_packet"
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchConfiguration(_Record):
+    """Resolved launcher settings, recorded before device connection."""
+
+    configuration: Packet
+    record_type: Literal["launch_configuration"] = "launch_configuration"
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceInfo(_Record):
+    """One explicit device report, including an explicitly empty report."""
+
+    stage: str
+    info: Packet
+    record_type: Literal["device_info"] = "device_info"
+
+
+type DiagnosticSeverity = Literal["info", "warning", "error"]
+
+
+@dataclass(frozen=True, slots=True)
+class Diagnostic(_Record):
+    """An explicit diagnostic; severity does not control capture lifecycle."""
+
+    severity: DiagnosticSeverity
+    source: str
+    stage: str
+    code: str
+    message: str
+    details: Packet
+    record_type: Literal["diagnostic"] = "diagnostic"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +190,9 @@ type CaptureRecord = (
     | SegmentStarted
     | SegmentStopped
     | Marker
+    | LaunchConfiguration
+    | DeviceInfo
+    | Diagnostic
 )
 
 
@@ -221,8 +257,27 @@ def _packet(value: object) -> dict[str, object]:
     return parsed
 
 
+def validate_document(value: object) -> dict[str, object]:
+    """Validate and deeply copy a finite JSON object without vendor interpretation."""
+
+    def check(item: object) -> None:
+        if isinstance(item, Mapping):
+            if not all(isinstance(key, str) for key in item):
+                raise CaptureDecodeError("JSON object keys must be strings")
+            for child in item.values():
+                check(child)
+        elif isinstance(item, list):
+            for child in item:
+                check(child)
+        elif item is not None and not isinstance(item, str | int | float | bool):
+            raise CaptureDecodeError("document must contain only JSON values")
+
+    check(value)
+    return _packet(value)
+
+
 def record_to_wire_map(record: CaptureRecord) -> dict[str, object]:
-    """Convert a typed capture record to its schema-version-2 wire mapping.
+    """Convert a typed capture record to its schema-version-3 wire mapping.
 
     The returned mapping is newly allocated, including copies of attribute and
     packet mappings.  Call :func:`encode_record` when validation and JSONL bytes
@@ -236,8 +291,28 @@ def record_to_wire_map(record: CaptureRecord) -> dict[str, object]:
         "record_type": record.record_type,
     }
     match record:
+        case LaunchConfiguration(configuration=configuration):
+            value["configuration"] = validate_document(configuration)
+        case DeviceInfo(stage=stage, info=info):
+            value.update(stage=stage, info=validate_document(info))
+        case Diagnostic(
+            severity=severity,
+            source=source,
+            stage=stage,
+            code=code,
+            message=message,
+            details=details,
+        ):
+            value.update(
+                severity=severity,
+                source=source,
+                stage=stage,
+                code=code,
+                message=message,
+                details=validate_document(details),
+            )
         case RawPacket(packet=packet):
-            value["packet"] = dict(packet)
+            value["packet"] = validate_document(packet)
         case CaptureStarted(capture_id=identifier, attributes=attributes):
             value.update(capture_id=identifier, attributes=dict(attributes))
         case CaptureStopped(reason=reason):
@@ -283,7 +358,7 @@ def encode_record(record: CaptureRecord) -> bytes:
 
 
 def decode_record(value: object) -> CaptureRecord:
-    """Decode and validate one schema-version-2 wire mapping.
+    """Decode and validate one schema-version-3 wire mapping.
 
     Unknown fields on known record types are ignored for forward compatibility.
     Unknown record types and unsupported schema versions are rejected.
@@ -320,13 +395,49 @@ def decode_record(value: object) -> CaptureRecord:
     host_unix_ns = _require_int(value["host_unix_ns"], "host_unix_ns")
     record_type = _require_string(value["record_type"], "record_type")
     match record_type:
+        case "launch_configuration":
+            return LaunchConfiguration(
+                schema,
+                sequence,
+                host_monotonic_ns,
+                host_unix_ns,
+                validate_document(value.get("configuration")),
+            )
+        case "device_info":
+            return DeviceInfo(
+                schema,
+                sequence,
+                host_monotonic_ns,
+                host_unix_ns,
+                _require_string(value.get("stage"), "stage"),
+                validate_document(value.get("info")),
+            )
+        case "diagnostic":
+            message = value.get("message")
+            if not isinstance(message, str):
+                raise CaptureDecodeError("message must be a string")
+            severity = value.get("severity")
+            if severity not in ("info", "warning", "error"):
+                raise CaptureDecodeError("severity must be info, warning, or error")
+            return Diagnostic(
+                schema,
+                sequence,
+                host_monotonic_ns,
+                host_unix_ns,
+                severity,
+                _require_string(value.get("source"), "source"),
+                _require_string(value.get("stage"), "stage"),
+                _require_string(value.get("code"), "code"),
+                message,
+                validate_document(value.get("details")),
+            )
         case "raw_packet":
             return RawPacket(
                 schema_version=schema,
                 sequence=sequence,
                 host_monotonic_ns=host_monotonic_ns,
                 host_unix_ns=host_unix_ns,
-                packet=_packet(value.get("packet")),
+                packet=validate_document(value.get("packet")),
             )
         case "capture_started":
             return CaptureStarted(
@@ -390,7 +501,7 @@ def decode_record(value: object) -> CaptureRecord:
 
 
 class CaptureLogWriter:
-    """Create and append to one authoritative schema-version-2 capture.
+    """Create and append to one authoritative schema-version-3 capture.
 
     Construction exclusively creates ``path`` and immediately writes a
     :class:`CaptureStarted` record.  Boundary records force a Zstandard frame
@@ -483,8 +594,65 @@ class CaptureLogWriter:
                 sequence=self._next_sequence,
                 host_monotonic_ns=self._monotonic_ns(),
                 host_unix_ns=self._unix_ns(),
-                packet=_packet(packet),
+                packet=validate_document(packet),
             )
+        )
+
+    def append_launch_configuration(self, configuration: Packet) -> int:
+        """Append resolved settings once, immediately after capture_started."""
+        if self._next_sequence != 1:
+            raise CaptureLifecycleError(
+                "launch configuration must be the second record"
+            )
+        return self._append(
+            LaunchConfiguration(
+                SCHEMA_VERSION,
+                self._next_sequence,
+                self._monotonic_ns(),
+                self._unix_ns(),
+                validate_document(configuration),
+            ),
+            boundary=True,
+        )
+
+    def append_device_info(self, stage: str, info: Packet) -> int:
+        """Append an explicit report without changing its payload."""
+        return self._append(
+            DeviceInfo(
+                SCHEMA_VERSION,
+                self._next_sequence,
+                self._monotonic_ns(),
+                self._unix_ns(),
+                stage,
+                validate_document(info),
+            ),
+            boundary=True,
+        )
+
+    def append_diagnostic(
+        self,
+        severity: DiagnosticSeverity,
+        source: str,
+        stage: str,
+        code: str,
+        message: str,
+        details: Packet,
+    ) -> int:
+        """Append a diagnostic without stopping acquisition."""
+        return self._append(
+            Diagnostic(
+                SCHEMA_VERSION,
+                self._next_sequence,
+                self._monotonic_ns(),
+                self._unix_ns(),
+                severity,
+                source,
+                stage,
+                code,
+                message,
+                validate_document(details),
+            ),
+            boundary=True,
         )
 
     def start_segment(
@@ -690,6 +858,10 @@ class CaptureLogReader:
                         )
                     if stopped:
                         raise CaptureLifecycleError("record after capture_stopped")
+                    if isinstance(record, LaunchConfiguration) and record.sequence != 1:
+                        raise CaptureLifecycleError(
+                            "launch configuration must be the second record"
+                        )
                     if isinstance(record, SegmentStarted):
                         if record.segment_id in open_segments:
                             raise CaptureLifecycleError(

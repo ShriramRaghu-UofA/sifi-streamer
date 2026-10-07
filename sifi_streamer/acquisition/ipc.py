@@ -4,10 +4,11 @@ These frozen messages cross a multiprocessing queue boundary.  Attribute
 mappings are defensively copied by the sending API before a message is queued.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from sifi_streamer.capture.records import Attributes
+from sifi_streamer.capture.events import CaptureEvent
+from sifi_streamer.capture.records import Attributes, Packet
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,7 @@ class StartCapture:
     capture_file: Path
     capture_id: str
     attributes: Attributes
+    configuration: Packet = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,8 +86,26 @@ class Shutdown:
     """Request orderly worker shutdown and resource cleanup."""
 
 
+@dataclass(frozen=True, slots=True)
+class AddCaptureEvent:
+    """Request persistence of an explicit report or diagnostic."""
+
+    event: CaptureEvent
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureEventAdded:
+    """Acknowledge persistence of an explicit capture event."""
+
+
 type CommandMessage = (
-    StartCapture | StopCapture | StartSegment | StopSegment | AddMarker | Shutdown
+    StartCapture
+    | StopCapture
+    | StartSegment
+    | StopSegment
+    | AddMarker
+    | AddCaptureEvent
+    | Shutdown
 )
 
 
@@ -112,16 +132,25 @@ class StreamInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class DeviceInfoUpdate:
+    """Ordered report snapshot so older queued reports cannot replace Ready."""
+
+    revision: int
+    info: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class Ready:
     """Report successful worker startup and available live streams.
 
     Attributes:
         streams: Shared-memory layout for each declared stream.
-        device_info: Optional vendor metadata reported during device connection.
+        device_info: Latest complete device report, including an empty object.
     """
 
     streams: tuple[StreamInfo, ...]
-    device_info: dict[str, object] | None = None
+    device_info: dict[str, object] = field(default_factory=dict)
+    device_info_revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,4 +207,5 @@ type AckMessage = (
     | SegmentStopped
     | MarkerAdded
     | ErrorAck
+    | CaptureEventAdded
 )

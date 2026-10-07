@@ -1,6 +1,37 @@
 import { expect, test } from '@playwright/test';
 import { health, mockSession } from './fixtures';
 
+test('requested device becomes reported identity and remains visible after stopping', async ({
+  page,
+}) => {
+  const { session } = await mockSession(page);
+  session.configuration.device_handle = 'SiFiBand_AA92';
+  await page.goto('/#test-token');
+  await expect(page.getByRole('heading', { name: 'Requested connection' })).toBeVisible();
+  await expect(
+    page
+      .getByRole('heading', { name: 'Requested connection' })
+      .locator('..')
+      .getByText('SiFiBand_AA92', { exact: true }),
+  ).toBeVisible();
+  session.device_info = {
+    info: { name: 'SiFiBand_AA92', mac: 'AA:BB:CC:DD:EE:FF', vendor: { value: [1, null] } },
+  };
+  session.device_summary = { Name: 'SiFiBand_AA92', 'MAC address': 'AA:BB:CC:DD:EE:FF' };
+  session.launch_configuration = { requested: { device_handle: 'SiFiBand_AA92' } };
+  await page.getByRole('button', { name: 'Start capture', exact: true }).click();
+  await page.getByRole('tab', { name: 'Session', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Reported device' })).toBeVisible();
+  await expect(page.getByText('AA:BB:CC:DD:EE:FF', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Device report', exact: true }).click();
+  await expect(page.locator('pre').filter({ hasText: 'vendor' })).toBeVisible();
+  await page.getByRole('button', { name: 'Recorded launch configuration', exact: true }).click();
+  await expect(page.locator('pre').filter({ hasText: 'requested' })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop & save' }).click();
+  await page.getByRole('button', { name: 'Stop and save', exact: true }).click();
+  await expect(page.getByText('AA:BB:CC:DD:EE:FF', { exact: true })).toBeVisible();
+});
+
 test('sensor summary surfaces rates and disabled sensors with settings collapsed', async ({
   page,
 }) => {

@@ -429,9 +429,9 @@ class SiFiBandDevice:
         return streams_from_modalities(self.modalities)
 
     @property
-    def device_info(self) -> None:
-        """Return ``None`` because the raw TCP stream has no info handshake."""
-        return None
+    def device_info(self) -> dict[str, object]:
+        """Return an empty report because the TCP stream has no info handshake."""
+        return {}
 
     def connect(self) -> None:
         """Connect to the configured TCP endpoint; repeated calls are no-ops."""
@@ -514,9 +514,9 @@ class SyntheticSiFiDevice:
         return streams_from_modalities(self.modalities)
 
     @property
-    def device_info(self) -> None:
-        """Return ``None`` because no physical-device metadata exists."""
-        return None
+    def device_info(self) -> dict[str, object]:
+        """Return an empty report because no physical-device metadata exists."""
+        return {}
 
     def connect(self) -> None:
         """Reset generated time to zero and enable packet reads."""

@@ -114,7 +114,9 @@ class AcquisitionDevice(Protocol):
     def streams(self) -> tuple[SignalStreamSpec, ...]: ...
 
     @property
-    def device_info(self) -> dict[str, object] | None: ...
+    def device_info(self) -> dict[str, object]:
+        """Return complete finite JSON metadata, or an explicit empty report."""
+        ...
 
 
 type DeviceFactory = Callable[[], AcquisitionDevice]

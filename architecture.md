@@ -60,17 +60,42 @@ Live metadata requires `info.configuration`; historical capture metadata may
 also use the old `info.device` configuration block.
 
 The authoritative artifact is an append-only `*.capture.jsonl.zst`.
-`CaptureLogWriter` exclusively creates schema-v2 JSONL in concatenated
+`CaptureLogWriter` exclusively creates schema-v3 JSONL in concatenated
 Zstandard frames. Raw packet documents retain all JSON fields. Readers accept
 unknown fields while validating record version, sequence, capture lifecycle,
 segment lifecycle, JSON finiteness, and scalar annotations. A crashed,
 unterminated log remains readable; readers never mutate it.
 
-When a connected acquisition device supplies a startup information document,
-the recorder writes that complete document as the first `raw_packet` after
-`capture_started`. For SiFi hardware this preserves the bridge `info` response,
-including firmware, configuration, and reported sample rates, in the
-authoritative artifact without changing schema v2.
+The composed backend prepares capture creation before entering its handle. The
+worker exclusively opens the capture and writes `capture_started` followed by
+`launch_configuration` before invoking the device factory or connecting hardware.
+Connection, configuration, and stream-registry failures produce an error-severity
+`diagnostic` and `capture_stopped` with `startup_failure`. The worker remains the
+single writer owner; capture creation is never split across processes.
+
+Device reports use `device_info` records with a stage and a complete, untouched
+finite JSON object. The optional structural `CaptureEventSource` lets an
+integration install a worker-owned event sink before connection. SiFi emits
+`before_configuration`, `after_configuration`, and `after_start` reports; other
+integrations may use their own stages and emit reports during acquisition. An
+explicit `{}` report is recorded, and repeated explicit reports are preserved.
+Devices without the event extension publish `device_info` once after connection.
+The required property returns a JSON object, including `{}` when no information
+is available. Ordinary packet `capture_document()` retains `None` to suppress a
+record; `{}` is an actual raw packet document.
+
+`DiagnosticEvent` carries severity, source, stage, code, message, and a JSON
+object of details. Severity is descriptive and never automatically changes
+lifecycle. Consumers use `CaptureController.record_event()` for non-terminal
+errors, warnings, or information. Terminal acquisition failures are also recorded
+before orderly shutdown. Automatic Python logging and periodic health snapshots
+remain separate from authoritative diagnostics.
+
+The monitor exposes the latest explicit device report, retained after shutdown.
+The web API exposes it together with recorded launch settings. An injected
+integration formatter supplies a scalar display summary without teaching generic
+acquisition or the UI vendor field layouts. The UI shows requested selection
+before connection and reported identity afterward, with complete JSON in details.
 
 Optional SiFi table extraction is a derived, non-authoritative boundary.
 `sifi_streamer.sifi.export` validates known SiFi packet layouts and exposes

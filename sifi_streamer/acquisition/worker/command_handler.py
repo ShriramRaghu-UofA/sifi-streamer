@@ -5,7 +5,9 @@ import queue
 from multiprocessing import Queue
 
 from sifi_streamer.acquisition.ipc import (
+    AddCaptureEvent,
     AddMarker,
+    CaptureEventAdded,
     CaptureStarted,
     CaptureStopped,
     CommandMessage,
@@ -20,6 +22,7 @@ from sifi_streamer.acquisition.ipc import (
     StopSegment,
 )
 from sifi_streamer.acquisition.worker.recorder import RecorderFSM
+from sifi_streamer.capture.events import CaptureEventSink
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,9 @@ class CommandHandler:
         recorder: RecorderFSM,
         *,
         poll_timeout_s: float = 0.02,
+        event_sink: CaptureEventSink | None = None,
     ) -> None:
+        self._event_sink = event_sink or recorder.record_event
         self._cmd, self._ack, self._rec, self._poll = (
             cmd_queue,
             ack_queue,
@@ -62,9 +67,12 @@ class CommandHandler:
         try:
             match command:
                 case StartCapture(
-                    capture_file=file, capture_id=identifier, attributes=attributes
+                    capture_file=file,
+                    capture_id=identifier,
+                    attributes=attributes,
+                    configuration=configuration,
                 ):
-                    self._rec.start_capture(file, identifier, attributes)
+                    self._rec.start_capture(file, identifier, attributes, configuration)
                     self._ack.put(CaptureStarted(file))
                 case StopCapture(reason=reason):
                     self._rec.stop_capture(reason)
@@ -92,6 +100,11 @@ class CommandHandler:
                         source_clock=clock,
                     )
                     self._ack.put(MarkerAdded(identifier))
+                case AddCaptureEvent(event=event):
+                    if not self._rec.active:
+                        raise RuntimeError("capture is not active")
+                    self._event_sink(event)
+                    self._ack.put(CaptureEventAdded())
                 case Shutdown():
                     logger.info("Worker received shutdown command")
                     return True

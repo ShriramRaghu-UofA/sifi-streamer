@@ -1,5 +1,12 @@
 export type Scalar = string | number | boolean | null;
 export type Attributes = Record<string, Scalar>;
+export type JsonValue = Scalar | JsonValue[] | { [key: string]: JsonValue };
+export type JsonDocument = Record<string, JsonValue>;
+export type Provenance = {
+  device_info: JsonDocument;
+  device_summary: Attributes;
+  launch_configuration: JsonDocument;
+};
 export type Phase = 'setup' | 'starting' | 'recording' | 'stopping' | 'stopped' | 'failed';
 export type Severity = 'healthy' | 'warming_up' | 'warning' | 'fatal';
 export type Thresholds = {
@@ -65,7 +72,7 @@ export type HealthEvent = {
   severity: Severity;
   message: string;
 };
-export type Bootstrap = {
+export type Bootstrap = Provenance & {
   state: Phase;
   error: string | null;
   output: string;
@@ -79,7 +86,7 @@ export type Bootstrap = {
   streams: Stream[];
 };
 export type Trace = { timestamps: number[]; samples: (number | null)[][] };
-export type Live = {
+export type Live = Provenance & {
   state: Phase;
   error: string | null;
   health: Health | null;

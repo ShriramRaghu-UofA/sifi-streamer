@@ -21,6 +21,7 @@ from sifi_streamer.capture import (
     CaptureLogReader,
     CaptureStarted,
     CaptureStopped,
+    DeviceInfo,
     Marker,
     RawPacket,
     Scalar,
@@ -362,6 +363,12 @@ def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
                     stop_host_unix_ns=record.host_unix_ns,
                     stop_reason=record.reason,
                 )
+            case DeviceInfo():
+                if (
+                    record.stage != "before_configuration"
+                    and (device_specs := _device_modalities(record.info)) is not None
+                ):
+                    declared = device_specs
             case RawPacket():
                 if (device_specs := _device_modalities(record.packet)) is not None:
                     if declared and declared != device_specs:

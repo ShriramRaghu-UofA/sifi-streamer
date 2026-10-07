@@ -19,12 +19,25 @@ from sifi_streamer.acquisition.devices import (
     DeviceFactory,
     SignalStreamSpec,
 )
+from sifi_streamer.acquisition.events import CaptureEventSource
 from sifi_streamer.acquisition.health import WorkerFatal, WorkerHealthCollector
-from sifi_streamer.acquisition.ipc import ErrorAck, Ready, StreamInfo
+from sifi_streamer.acquisition.ipc import (
+    DeviceInfoUpdate,
+    ErrorAck,
+    Ready,
+    StartCapture,
+    StreamInfo,
+)
 from sifi_streamer.acquisition.ring_buffer import SeqlockRingBuffer
 from sifi_streamer.acquisition.worker.acquisition import AcquisitionThread
 from sifi_streamer.acquisition.worker.command_handler import CommandHandler
 from sifi_streamer.acquisition.worker.recorder import RecorderFSM
+from sifi_streamer.capture.events import (
+    CaptureEvent,
+    DeviceInfoEvent,
+    DiagnosticEvent,
+)
+from sifi_streamer.capture.records import validate_document
 from sifi_streamer.exceptions import DeviceError
 
 logger = logging.getLogger(__name__)
@@ -45,6 +58,8 @@ def background_main(
     log_level: int = logging.INFO,
     health_queue: Queue | None = None,
     fatal_queue: Queue | None = None,
+    startup_capture: StartCapture | None = None,
+    device_info_queue: Queue | None = None,
 ) -> None:
     """Run device acquisition, shared-memory publication, and capture recording.
 
@@ -66,10 +81,44 @@ def background_main(
     )
     _ignore_console_interrupts()
     logger.info("Acquisition worker starting")
+    recorder = RecorderFSM(config, None)
+    latest_info: dict[str, object] = {}
+    report_received = False
+    report_revision = 0
+    report_lock = threading.Lock()
+
+    def emit(event: CaptureEvent) -> None:
+        nonlocal latest_info, report_received, report_revision
+        with report_lock:
+            recorder.record_event(event)
+            if isinstance(event, DeviceInfoEvent):
+                latest_info = validate_document(event.info)
+                report_received = True
+                report_revision += 1
+                if device_info_queue is not None:
+                    device_info_queue.put(
+                        DeviceInfoUpdate(report_revision, latest_info)
+                    )
+
+    if startup_capture is not None:
+        try:
+            recorder.start_capture(
+                startup_capture.capture_file,
+                startup_capture.capture_id,
+                startup_capture.attributes,
+                startup_capture.configuration,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            ack_queue.put(ErrorAck(str(exc)))
+            return
     device: AcquisitionDevice | None = None
     try:
         device = device_factory()
+        if isinstance(device, CaptureEventSource):
+            device.set_capture_event_sink(emit)
         device.connect()
+        if not report_received:
+            emit(DeviceInfoEvent("after_start", device.device_info))
         streams: tuple[SignalStreamSpec, ...] = tuple(device.streams)
         if not streams or len({item.stream_id for item in streams}) != len(streams):
             raise ValueError("device streams must be non-empty and uniquely identified")
@@ -92,6 +141,18 @@ def background_main(
             ) as cleanup:
                 logger.exception("Device cleanup after failed startup also failed")
                 message += f"; device cleanup failed: {cleanup}"
+        if startup_capture is not None:
+            recorder.record_event(
+                DiagnosticEvent(
+                    "error",
+                    "acquisition",
+                    "startup",
+                    "startup_failure",
+                    message,
+                    {"exception_type": type(exc).__name__},
+                )
+            )
+            recorder.stop_capture("startup_failure")
         ack_queue.put(ErrorAck(message))
         return
     rings: dict[str, SeqlockRingBuffer] = {}
@@ -113,6 +174,18 @@ def background_main(
             rings[spec.stream_id] = ring
     except (OSError, ValueError) as exc:
         logger.exception("Could not allocate shared memory")
+        if startup_capture is not None:
+            recorder.record_event(
+                DiagnosticEvent(
+                    "error",
+                    "acquisition",
+                    "shared_memory",
+                    "startup_failure",
+                    str(exc),
+                    {},
+                )
+            )
+            recorder.stop_capture("startup_failure")
         ack_queue.put(ErrorAck(str(exc)))
         device.disconnect()
         for shm in shms.values():
@@ -122,7 +195,6 @@ def background_main(
             except OSError:
                 pass
         return
-    recorder = RecorderFSM(config, device.device_info)
     specs = {item.stream_id: item for item in streams}
     health = WorkerHealthCollector(
         tuple(
@@ -191,7 +263,9 @@ def background_main(
     acquisition = AcquisitionThread(
         device, on_packet, stop_event, already_connected=True
     )
-    handler = CommandHandler(cmd_queue, ack_queue, recorder)
+    handler = CommandHandler(cmd_queue, ack_queue, recorder, event_sink=emit)
+    with report_lock:
+        ready_info, ready_revision = latest_info, report_revision
     acquisition.start()
     ack_queue.put(
         Ready(
@@ -209,7 +283,8 @@ def background_main(
                 )
                 for spec in streams
             ),
-            device.device_info,
+            ready_info,
+            ready_revision,
         )
     )
     try:
@@ -232,6 +307,17 @@ def background_main(
                 and acquisition.failure is not None
                 and not fatal_sent
             ):
+                if recorder.active:
+                    recorder.record_event(
+                        DiagnosticEvent(
+                            "error",
+                            "acquisition",
+                            "during_capture",
+                            "acquisition_failure",
+                            str(acquisition.failure),
+                            {"exception_type": type(acquisition.failure).__name__},
+                        )
+                    )
                 if fatal_queue is not None:
                     logger.error("Acquisition thread failed: %s", acquisition.failure)
                     fatal_queue.put(

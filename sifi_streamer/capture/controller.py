@@ -9,6 +9,7 @@ import logging
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
+from sifi_streamer.capture.events import CaptureEvent, copy_event
 from sifi_streamer.capture.records import Attributes, Scalar, validate_attributes
 from sifi_streamer.exceptions import CaptureInitializationError
 
@@ -42,6 +43,10 @@ class CaptureBackend(Protocol):
 
     def marker(self, marker_id: str, kind: str, attributes: Attributes) -> None:
         """Record one point marker."""
+        ...
+
+    def record_event(self, event: CaptureEvent) -> None:
+        """Persist an explicit report or diagnostic without changing lifecycle."""
         ...
 
 
@@ -126,6 +131,11 @@ class CaptureController:
         self._require_started()
         self._backend.marker(marker_id, kind, _values(attributes, extra))
         logger.info("Recorded marker %r (kind %r)", marker_id, kind)
+
+    def record_event(self, event: CaptureEvent) -> None:
+        """Record an explicit event; error severity alone does not close capture."""
+        self._require_started()
+        self._backend.record_event(copy_event(event))
 
     def start_segment(
         self,
@@ -227,6 +237,12 @@ class NoCaptureController:
     ) -> None:
         """Validate marker attributes without recording a marker."""
         _values(attributes, extra)
+
+    def record_event(self, event: CaptureEvent) -> None:
+        """Validate an explicit event without performing I/O."""
+        from sifi_streamer.capture.events import validate_event
+
+        validate_event(event)
 
     def start_segment(
         self,
