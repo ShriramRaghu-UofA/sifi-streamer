@@ -79,6 +79,30 @@ sequences, exactly one initial capture start, no records after capture stop, and
 valid segment pairing. A capture that ended in a crash may omit `CaptureStopped`
 and remains readable up to its last complete valid record.
 
+Third-party integrations can import `CaptureLogReader`, `RawPacket`,
+`LaunchConfiguration`, `DeviceInfo`, and `Diagnostic` from
+`sifi_streamer.capture` without installing the Parquet extra. The reader does
+not interpret vendor layouts: `packet`, `configuration`, `info`, and `details`
+retain complete finite JSON objects, including nested and unknown vendor fields.
+Dispatch on the public record types and pass their payloads to your own parser:
+
+```python
+from pathlib import Path
+from sifi_streamer.capture import CaptureLogReader, DeviceInfo, RawPacket
+
+for record in CaptureLogReader(Path("session.capture.jsonl.zst")):
+    match record:
+        case RawPacket(packet=packet):
+            parse_vendor_packet(packet)  # consumer-owned parser
+        case DeviceInfo(stage=stage, info=info):
+            parse_vendor_report(stage, info)  # consumer-owned parser
+```
+
+Every record exposes `sequence`, `host_monotonic_ns`, and `host_unix_ns`.
+Unknown envelope fields on known record types are accepted but are not exposed
+by the typed record model; unknown record types and unsupported schema versions
+are rejected. Vendor payload fields are preserved by decode/encode round trips.
+
 ## Controllers and ownership
 
 `CaptureBackend` is a runtime-checkable structural protocol with `start`, `stop`,
@@ -188,7 +212,7 @@ was parsed, preserving unknown device fields.
 
 Install the `parquet` extra before importing `sifi_streamer.sifi.export`.
 `read_sifi_capture_tables(path)` returns a frozen `SiFiCaptureTables` value with
-five views of one capture:
+eight views of one capture (table schema version 2):
 
 - `capture`: one row containing capture identity, lifecycle clocks/reason, and
   `attribute_*` columns;
@@ -202,6 +226,18 @@ five views of one capture:
 - `signals`: a mapping from `Modality` to sample-level DataFrames with packet
   sequence, sample index, distinct device/bridge/host clocks, health fields,
   and canonical channel columns.
+- `launch_configuration`: the optional resolved settings record;
+- `device_info`: every explicit device report, including empty and repeated
+  reports and the pre-configuration stage;
+- `diagnostics`: every diagnostic with severity, source, stage, code, and message.
+
+The three metadata tables include capture ID/file, record sequence, and host
+clocks. Nested documents are retained in `configuration_json`, `info_json`, and
+`details_json` string columns; use `json.loads` to recover their full JSON values.
+Empty tables retain their columns and nullable dtypes. Captures without SiFi
+signals or metadata, including startup failures, have empty `streams` and
+`signals` views and still export their lifecycle and metadata. Unknown vendor
+packets are not included in signal tables; use the generic reader for them.
 
 A packet belongs to a segment exactly when its sequence is greater than the
 segment's start sequence and less than its stop sequence. This ordering rule is
@@ -216,7 +252,8 @@ malformed, rather than silently dropping samples.
 
 `export_sifi_capture_to_parquet(path, output=None, force=False)` writes
 `capture.parquet`, `streams.parquet`, `markers.parquet`, `segments.parquet`, and
-`signals/<modality>.parquet` through a temporary directory. Existing output is
+`signals/<modality>.parquet`, plus `launch_configuration.parquet`,
+`device_info.parquet`, and `diagnostics.parquet` through a temporary directory. Existing output is
 refused unless `force=True`. The `sifi-capture-to-parquet` command exposes the
 same operation. These tables are derived and do not interpret marker/segment
 kinds, supersession, trials, presentations, or downstream labeling policy.

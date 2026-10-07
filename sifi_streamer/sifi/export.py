@@ -5,6 +5,7 @@ generic capture vocabulary.  It does not interpret application-defined marker
 or segment kinds.  Install ``sifi-streamer[parquet]`` before importing it.
 """
 
+import json
 import math
 import re
 import shutil
@@ -22,6 +23,8 @@ from sifi_streamer.capture import (
     CaptureStarted,
     CaptureStopped,
     DeviceInfo,
+    Diagnostic,
+    LaunchConfiguration,
     Marker,
     RawPacket,
     Scalar,
@@ -36,7 +39,7 @@ from sifi_streamer.sifi.devices import (
     modalities_from_device_info,
 )
 
-SIFI_TABLE_SCHEMA_VERSION = 1
+SIFI_TABLE_SCHEMA_VERSION = 2
 __all__ = [
     "SIFI_TABLE_SCHEMA_VERSION",
     "SiFiCaptureTables",
@@ -73,6 +76,11 @@ class SiFiCaptureTables:
     membership is determined without clock inference: a packet belongs to a
     segment when its sequence is greater than ``start_sequence`` and less than
     ``stop_sequence`` (or the stop is missing in a crash-truncated capture).
+
+    ``launch_configuration``, ``device_info``, and ``diagnostics`` preserve
+    metadata occurrences, record sequence, and host clocks. Their document
+    columns (``configuration_json``, ``info_json``, ``details_json``) contain
+    complete JSON objects serialized as strings; recover them with json.loads.
     """
 
     capture: pd.DataFrame
@@ -80,6 +88,9 @@ class SiFiCaptureTables:
     markers: pd.DataFrame
     segments: pd.DataFrame
     signals: Mapping[Modality, pd.DataFrame]
+    launch_configuration: pd.DataFrame
+    device_info: pd.DataFrame
+    diagnostics: pd.DataFrame
 
 
 def _number(value: object, name: str, *, positive: bool = False) -> float | None:
@@ -185,6 +196,25 @@ def _typed_columns(
     for column in strings:
         frame[column] = pd.array(frame[column], dtype="string")
     return frame
+
+
+def _metadata_frame(
+    rows: list[dict[str, object]], fields: tuple[str, ...]
+) -> pd.DataFrame:
+    """Retain nested documents as lossless JSON in portable string columns."""
+    columns = (
+        "capture_id",
+        "capture_file",
+        "sequence",
+        "host_monotonic_ns",
+        "host_unix_ns",
+        *fields,
+    )
+    return _typed_columns(
+        pd.DataFrame(rows, columns=columns),
+        integers=("sequence", "host_monotonic_ns", "host_unix_ns"),
+        strings=("capture_id", "capture_file", *fields),
+    )
 
 
 def _device_modalities(
@@ -306,7 +336,12 @@ def _rate(
 
 
 def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
-    """Read one capture into canonical, synchronized SiFi pandas tables."""
+    """Read one capture into canonical, synchronized SiFi pandas tables.
+
+    Valid captures without SiFi streams retain lifecycle and metadata tables
+    with empty stream/signal views. Unknown vendor packets are accessible
+    through the generic CaptureLogReader rather than these signal tables.
+    """
     source = Path(source)
     capture_start: CaptureStarted | None = None
     capture_stop: CaptureStopped | None = None
@@ -319,8 +354,18 @@ def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
     segment_rows: list[dict[str, object]] = []
     segment_attributes: list[Mapping[str, Scalar]] = []
     open_segments: dict[str, int] = {}
+    launch_rows: list[dict[str, object]] = []
+    device_rows: list[dict[str, object]] = []
+    diagnostic_rows: list[dict[str, object]] = []
 
     for record in CaptureLogReader(source):
+        metadata: dict[str, object] = {
+            "capture_id": capture_start.capture_id if capture_start else None,
+            "capture_file": source.name,
+            "sequence": record.sequence,
+            "host_monotonic_ns": record.host_monotonic_ns,
+            "host_unix_ns": record.host_unix_ns,
+        }
         match record:
             case CaptureStarted():
                 capture_start = record
@@ -363,7 +408,35 @@ def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
                     stop_host_unix_ns=record.host_unix_ns,
                     stop_reason=record.reason,
                 )
+            case LaunchConfiguration():
+                launch_rows.append(
+                    {
+                        **metadata,
+                        "configuration_json": json.dumps(
+                            record.configuration, allow_nan=False
+                        ),
+                    }
+                )
+            case Diagnostic():
+                diagnostic_rows.append(
+                    {
+                        **metadata,
+                        "severity": record.severity,
+                        "source": record.source,
+                        "stage": record.stage,
+                        "code": record.code,
+                        "message": record.message,
+                        "details_json": json.dumps(record.details, allow_nan=False),
+                    }
+                )
             case DeviceInfo():
+                device_rows.append(
+                    {
+                        **metadata,
+                        "stage": record.stage,
+                        "info_json": json.dumps(record.info, allow_nan=False),
+                    }
+                )
                 if (
                     record.stage != "before_configuration"
                     and (device_specs := _device_modalities(record.info)) is not None
@@ -384,10 +457,6 @@ def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
     if capture_start is None:
         raise SiFiExportError("capture has no capture_started record")
     available = set(declared) | observed
-    if not available:
-        raise SiFiExportError(
-            "capture contains neither SiFi stream metadata nor SiFi signal packets"
-        )
 
     signal_rows: dict[Modality, list[dict[str, object]]] = {
         modality: [] for modality in available
@@ -502,7 +571,17 @@ def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
         strings=("segment_id", "segment_kind", "stop_reason"),
     )
     streams = _typed_columns(
-        pd.DataFrame(stream_rows),
+        pd.DataFrame(
+            stream_rows,
+            columns=(
+                "modality",
+                "channel_id",
+                "channel_index",
+                "dtype",
+                "nominal_rate_hz",
+                "rate_source",
+            ),
+        ),
         integers=("channel_index",),
         floats=("nominal_rate_hz",),
         strings=("modality", "channel_id", "dtype", "rate_source"),
@@ -513,6 +592,19 @@ def read_sifi_capture_tables(source: Path) -> SiFiCaptureTables:
         markers,
         segments,
         MappingProxyType(signals),
+        _metadata_frame(launch_rows, ("configuration_json",)),
+        _metadata_frame(device_rows, ("stage", "info_json")),
+        _metadata_frame(
+            diagnostic_rows,
+            (
+                "severity",
+                "source",
+                "stage",
+                "code",
+                "message",
+                "details_json",
+            ),
+        ),
     )
 
 
@@ -538,6 +630,11 @@ def _write_tables(tables: SiFiCaptureTables, destination: Path) -> None:
     tables.streams.to_parquet(destination / "streams.parquet", index=False)
     tables.markers.to_parquet(destination / "markers.parquet", index=False)
     tables.segments.to_parquet(destination / "segments.parquet", index=False)
+    tables.launch_configuration.to_parquet(
+        destination / "launch_configuration.parquet", index=False
+    )
+    tables.device_info.to_parquet(destination / "device_info.parquet", index=False)
+    tables.diagnostics.to_parquet(destination / "diagnostics.parquet", index=False)
     signal_directory = destination / "signals"
     signal_directory.mkdir()
     for modality, frame in tables.signals.items():

@@ -100,7 +100,11 @@ before connection and reported identity afterward, with complete JSON in details
 Optional SiFi table extraction is a derived, non-authoritative boundary.
 `sifi_streamer.sifi.export` validates known SiFi packet layouts and exposes
 capture, stream, marker, segment, and per-modality pandas tables. Capture
-sequence and the recorded clocks are preserved so consumers can join tables
+provenance and diagnostics have separate tables with lossless JSON document
+columns, preserving every explicit report and its recorded stage. Valid captures
+without streams still export their metadata and lifecycle. The generic public
+reader remains the vendor-neutral extension point for consumer-owned parsers.
+Capture sequence and the recorded clocks are preserved so consumers can join tables
 without the package interpreting marker or segment kinds. Parquet datasets are
 published only as a convenience representation; cognitive labeling, attempt
 selection, supersession, and other application policies remain downstream.

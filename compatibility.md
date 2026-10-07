@@ -1,5 +1,14 @@
 # Pre-v1 API and capture format changes
 
+SiFi derived table schema version 2 adds `launch_configuration`, `device_info`,
+and `diagnostics` DataFrames to `SiFiCaptureTables` and corresponding Parquet
+files. Direct construction of this value now requires the three additional
+fields. Nested metadata documents use lossless JSON string columns. Valid
+captures without SiFi streams now export with empty stream/signal views instead
+of failing. The authoritative capture schema remains version 3. The public
+device-neutral reader continues to expose complete vendor payloads for custom
+third-party parsers without optional table dependencies.
+
 Capture schema version 3 adds `launch_configuration`, `device_info`, and
 `diagnostic` to the existing six record types. This is an intentional breaking
 change: schema-v2 captures and older readers are not supported by the current

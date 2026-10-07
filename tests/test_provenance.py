@@ -177,6 +177,43 @@ class ProvenanceTests(unittest.TestCase):
         for record in records:
             self.assertEqual(decode_record(json.loads(encode_record(record))), record)
 
+    def test_public_reader_allows_independent_vendor_parsing_without_mutation(
+        self,
+    ) -> None:
+        payload = {
+            "custom_samples": [{"channel": "vendor-only", "value": 2**60 + 1}],
+            "unknown": [None, {"extension": True}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "vendor.capture.jsonl.zst"
+            with CaptureLogWriter(path, "vendor") as writer:
+                writer.append_launch_configuration({"vendor_settings": payload})
+                writer.append_device_info("vendor_stage", payload)
+                writer.append_packet(payload)
+                writer.append_diagnostic(
+                    "warning",
+                    "vendor",
+                    "vendor_stage",
+                    "custom_code",
+                    "Custom diagnostic",
+                    payload,
+                )
+            original = path.read_bytes()
+            reader = CaptureLogReader(path)
+            records = list(reader)
+            packet = next(record for record in records if isinstance(record, RawPacket))
+            self.assertEqual(packet.packet, payload)
+            samples = packet.packet["custom_samples"]
+            assert isinstance(samples, list)
+            self.assertEqual(samples[0]["value"], 2**60 + 1)
+            self.assertEqual(packet.sequence, 3)
+            self.assertEqual(list(reader), records)
+            self.assertEqual(path.read_bytes(), original)
+            for record in records:
+                self.assertEqual(
+                    decode_record(json.loads(encode_record(record))), record
+                )
+
     def test_invalid_documents_and_envelopes_do_not_consume_sequence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "invalid.capture.jsonl.zst"

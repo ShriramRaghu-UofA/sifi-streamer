@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from compression import zstd
@@ -203,13 +204,101 @@ class SiFiExportTests(unittest.TestCase):
             with self.assertRaisesRegex(SiFiExportError, "emg7"):
                 read_sifi_capture_tables(path)
 
-    def test_unknown_packets_are_ignored_but_sifi_is_required(self) -> None:
+    def test_unknown_packets_leave_empty_signal_views(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "unknown.capture.jsonl.zst"
             with CaptureLogWriter(path, "unknown") as writer:
                 writer.append_packet({"packet_type": "future", "data": {}})
-            with self.assertRaisesRegex(SiFiExportError, "neither SiFi"):
-                read_sifi_capture_tables(path)
+            tables = read_sifi_capture_tables(path)
+            self.assertTrue(tables.streams.empty)
+            self.assertEqual(dict(tables.signals), {})
+            self.assertEqual(tables.capture.loc[0, "capture_id"], "unknown")
+
+    def test_schema_three_metadata_survives_failed_capture_and_parquet(self) -> None:
+        payload = {"vendor": {"values": [None, True, 2**60 + 1, "µ"]}}
+        host_time = 1_790_000_000_000_000_001
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "failed.capture.jsonl.zst"
+            writer = CaptureLogWriter(
+                path,
+                "failed",
+                monotonic_ns=lambda: host_time,
+                unix_ns=lambda: host_time + 1,
+            )
+            writer.append_launch_configuration(payload)
+            writer.append_device_info("before_configuration", {})
+            writer.append_device_info("during_capture", payload)
+            writer.append_device_info("during_capture", payload)
+            for severity in ("info", "warning", "error"):
+                writer.append_diagnostic(
+                    severity,
+                    "vendor",
+                    "connect",
+                    "failed",
+                    "Connection failed",
+                    payload,
+                )
+            writer.close("startup_failure")
+            original = path.read_bytes()
+            tables = read_sifi_capture_tables(path)
+            output = export_sifi_capture_to_parquet(path)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(tables.capture.loc[0, "table_schema_version"], 2)
+            self.assertEqual(tables.capture.loc[0, "stop_reason"], "startup_failure")
+            self.assertTrue(tables.streams.empty)
+            self.assertEqual(dict(tables.signals), {})
+            for name in ("launch_configuration", "device_info", "diagnostics"):
+                frame = getattr(tables, name)
+                restored = pd.read_parquet(output / f"{name}.parquet")
+                pd.testing.assert_frame_equal(frame, restored)
+                self.assertEqual(frame["capture_id"].unique().tolist(), ["failed"])
+                self.assertEqual(
+                    frame["host_unix_ns"].unique().tolist(), [host_time + 1]
+                )
+            self.assertEqual(
+                json.loads(tables.launch_configuration.loc[0, "configuration_json"]),
+                payload,
+            )
+            self.assertEqual(tables.device_info["sequence"].tolist(), [2, 3, 4])
+            self.assertEqual(
+                [json.loads(value) for value in tables.device_info["info_json"]],
+                [{}, payload, payload],
+            )
+            self.assertEqual(
+                tables.diagnostics["severity"].tolist(), ["info", "warning", "error"]
+            )
+            self.assertEqual(
+                json.loads(tables.diagnostics.loc[2, "details_json"]), payload
+            )
+
+    def test_configured_reports_determine_streams_and_all_stages_are_retained(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "configured.capture.jsonl.zst"
+            with CaptureLogWriter(path, "configured") as writer:
+                for stage, rate in (
+                    ("before_configuration", 500),
+                    ("after_configuration", 1000),
+                    ("after_start", 1000),
+                ):
+                    writer.append_device_info(
+                        stage,
+                        {
+                            "info": {
+                                "configuration": {"emg": {"enabled": True, "fs": rate}}
+                            }
+                        },
+                    )
+                writer.append_packet(emg_packet((1.0,), sample_rate=1000))
+            tables = read_sifi_capture_tables(path)
+            self.assertEqual(
+                tables.streams["nominal_rate_hz"].unique().tolist(), [1000.0]
+            )
+            self.assertEqual(
+                tables.device_info["stage"].tolist(),
+                ["before_configuration", "after_configuration", "after_start"],
+            )
 
     def test_crash_truncated_capture_retains_open_segment_and_integer_clocks(
         self,
@@ -264,6 +353,8 @@ class SiFiExportTests(unittest.TestCase):
             self.assertTrue((output / "streams.parquet").is_file())
             self.assertTrue((output / "markers.parquet").is_file())
             self.assertTrue((output / "segments.parquet").is_file())
+            for name in ("launch_configuration", "device_info", "diagnostics"):
+                self.assertTrue(pd.read_parquet(output / f"{name}.parquet").empty)
             signal_path = output / "signals" / "emg_armband.parquet"
             self.assertEqual(pd.read_parquet(signal_path)["emg0"].tolist(), [1.0])
             with self.assertRaises(FileExistsError):

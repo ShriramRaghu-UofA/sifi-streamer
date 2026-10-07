@@ -421,9 +421,16 @@ sifi-capture-to-parquet session.capture.jsonl.zst
 ```
 
 The exporter writes a dataset directory containing capture, stream, marker,
-segment, and per-modality signal tables. It preserves record sequence and all
+segment, launch configuration, device report, diagnostic, and per-modality signal
+tables. Nested metadata documents are preserved as JSON string columns, including
+empty and repeated reports. Startup failures can export with empty signal views.
+It preserves record sequence and all
 recorded clock domains but does not interpret application-defined kinds or
 filter incomplete/superseded attempts. Conversion is not authoritative.
+
+Third-party integrations can use the public `sifi_streamer.capture.CaptureLogReader`
+and record types to parse complete vendor packet/report JSON themselves, without
+the Parquet extra. See the reader example in [api.md](api.md#capturelogreader).
 
 See the [Python API reference](api.md), [architecture.md](architecture.md),
 [compatibility.md](compatibility.md), and [contribution guide](CONTRIBUTING.md).
