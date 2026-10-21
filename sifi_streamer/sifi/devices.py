@@ -166,7 +166,7 @@ def _modality_field(modality: Modality) -> str:
 
 
 DEFAULT_MODALITIES = Modalities(
-    emg=ModalitySpec(tuple(f"emg{i}" for i in range(8)), 1600),
+    emg=ModalitySpec(tuple(f"emg{i}" for i in range(8)), 1000),
     imu=ModalitySpec(("ax", "ay", "az", "qw", "qx", "qy", "qz"), 100),
     ecg=ModalitySpec(("ecg",), 500),
     eda=ModalitySpec(("eda",), 50),
@@ -507,7 +507,7 @@ class SyntheticSiFiDevice:
         amplitude: Peak amplitude of generated channel sinusoids.
     """
 
-    def __init__(self, emg_sample_rate: int = 1600, amplitude: float = 100.0) -> None:
+    def __init__(self, emg_sample_rate: int = 1000, amplitude: float = 100.0) -> None:
         if emg_sample_rate <= 0:
             raise ValueError("emg_sample_rate must be positive")
         self._rate, self._amplitude, self._t, self._connected = (

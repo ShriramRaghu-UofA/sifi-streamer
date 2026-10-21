@@ -13,7 +13,7 @@ export function bootstrap(): Bootstrap {
     configuration: {
       device: 'SiFi bridge',
       transport: 'stdout',
-      emg_fs_hz: 1600,
+      emg_fs_hz: 1000,
       imu_fs_hz: 100,
       emg_enabled: true,
     },
@@ -46,8 +46,8 @@ const streams: Bootstrap['streams'] = [
     channels: Array.from({ length: 8 }, (_, index) => `emg${index}`),
     channel_labels: Array(8).fill(null),
     channel_units: Array(8).fill('V'),
-    nominal_rate_hz: 1600,
-    n_samples: 16000,
+    nominal_rate_hz: 1000,
+    n_samples: 10000,
   },
 ];
 export function health(count: number): Health {
@@ -60,10 +60,10 @@ export function health(count: number): Health {
       {
         stream_id: 'emg_armband',
         severity: 'healthy',
-        nominal_rate_hz: 1600,
-        reported_rate_hz: 1599.8,
-        observed_rate_hz: 1600,
-        source_rate_hz: 1600,
+        nominal_rate_hz: 1000,
+        reported_rate_hz: 999.8,
+        observed_rate_hz: 1000,
+        source_rate_hz: 1000,
         last_packet_age_seconds: 0.01,
         packet_count: count,
         sample_count: count * 100,
@@ -136,7 +136,7 @@ export async function mockSession(page: Page) {
               start_index: start,
               end_index: start + 100,
               overrun: false,
-              timestamps: Array.from({ length: 100 }, (_, i) => (start + i) / 1600),
+              timestamps: Array.from({ length: 100 }, (_, i) => (start + i) / 1000),
               samples: Array.from({ length: 100 }, (_, i) =>
                 Array.from({ length: 8 }, (_, j) =>
                   i === 30 ? null : Math.sin((start + i) / 10 + j),

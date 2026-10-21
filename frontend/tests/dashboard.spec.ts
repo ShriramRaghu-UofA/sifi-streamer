@@ -55,7 +55,7 @@ test('sensor summary surfaces rates and disabled sensors with settings collapsed
   await expect(ecg).toContainText('Disabled');
   await expect(ecg).toHaveClass(/bg-surface-200-800/);
   const emg = sensors.getByRole('listitem').filter({ hasText: 'EMG' });
-  await expect(emg).toContainText(/1[,.]?600 Hz/);
+  await expect(emg).toContainText(/1[,.]?000 Hz/);
   await expect(emg).toContainText('Enabled');
   await expect(emg).toHaveClass(/bg-primary-50-950/);
   await expect(sensors.getByRole('listitem').filter({ hasText: 'PPG' })).toContainText('50 Hz');

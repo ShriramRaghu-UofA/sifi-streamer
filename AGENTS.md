@@ -126,7 +126,7 @@ cross-process boundaries. Never use mutable default arguments.
 ## SiFi and bridge behavior
 
 - The managed bridge must configure an explicit EMG sample rate. The default
-  is 1600 Hz; supported values are 500, 1000, 1600, and 2000 Hz.
+  is 1000 Hz; supported values are 500, 1000, 1600, and 2000 Hz.
 - Bridge downloads must remain an explicitly invoked user operation through
   `uv run sifi-download-bridge`. Never download or update a bridge during
   package installation, import, capture creation, or device startup.

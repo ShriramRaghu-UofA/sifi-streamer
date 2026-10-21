@@ -15,7 +15,12 @@ from sifi_streamer.sifi.cli.sensor_options import (
     resolve_sensor_profile,
     sensor_profile_summary,
 )
-from sifi_streamer.sifi.devices import SiFiPacket
+from sifi_streamer.sifi.devices import (
+    DEFAULT_MODALITIES,
+    Modality,
+    SiFiPacket,
+    SyntheticSiFiDevice,
+)
 from sifi_streamer.sifi.sensor_profile import (
     ALL_SENSORS_PROFILE,
     EMG_IMU_PROFILE,
@@ -33,7 +38,7 @@ from sifi_streamer.web.cli import main as web_main
 ALL_SENSOR_CONFIGURATION = {
     "sensors": dict.fromkeys(("ecg", "emg", "eda", "imu", "ppg", "temperature"), True),
     "ecg": {"enabled": True, "fs": 500},
-    "emg": {"enabled": True, "fs": 1600},
+    "emg": {"enabled": True, "fs": 1000},
     "eda": {"enabled": True, "fs": 50},
     "imu": {"enabled": True, "fs": 100},
     "ppg": {"enabled": True, "sps": 200, "avg": 4},
@@ -143,7 +148,11 @@ class SensorProfileTests(unittest.TestCase):
 
     def test_default_profile_and_exhaustive_commands(self) -> None:
         profile = ALL_SENSORS_PROFILE
-        self.assertEqual(profile.emg.sample_rate_hz, 1600)
+        self.assertEqual(profile.emg.sample_rate_hz, 1000)
+        self.assertEqual(DEFAULT_MODALITIES.require(Modality.EMG).sample_rate, 1000)
+        self.assertEqual(
+            SyntheticSiFiDevice().modalities.require(Modality.EMG).sample_rate, 1000
+        )
         self.assertEqual(profile.ppg.samples_per_second, 200)
         self.assertEqual(profile.ppg.averaging, 4)
         self.assertEqual(profile.ppg.effective_sample_rate_hz, 50)
@@ -201,7 +210,7 @@ class SensorProfileTests(unittest.TestCase):
                 **ALL_SENSOR_INFO["info"],
                 "configuration": {
                     **ALL_SENSOR_CONFIGURATION,
-                    "emg": {"enabled": True, "fs": 1000},
+                    "emg": {"enabled": True, "fs": 2000},
                 },
             }
         }
@@ -211,7 +220,7 @@ class SensorProfileTests(unittest.TestCase):
             patch.object(device, "_send"),
             patch.object(device, "_wait_for_response"),
             patch.object(device, "_wait_for_info", return_value=bad_info),
-            self.assertRaisesRegex(Exception, "expected 1600 Hz"),
+            self.assertRaisesRegex(Exception, "expected 1000 Hz"),
         ):
             device.connect()
 
@@ -268,7 +277,7 @@ class SensorProfileTests(unittest.TestCase):
                 **ALL_SENSOR_INFO["info"],
                 "configuration": {
                     **ALL_SENSOR_CONFIGURATION,
-                    "emg": {"enabled": True, "fs": 1000},
+                    "emg": {"enabled": True, "fs": 2000},
                 },
             }
         }
@@ -288,7 +297,7 @@ class SensorProfileTests(unittest.TestCase):
                 side_effect=lambda: events.append("subscribe"),
             ),
             patch.object(device, "disconnect") as disconnect,
-            self.assertRaisesRegex(DeviceError, "expected 1600 Hz"),
+            self.assertRaisesRegex(DeviceError, "expected 1000 Hz"),
         ):
             device.connect()
         self.assertLess(events.index("subscribe"), events.index("start"))
@@ -371,7 +380,7 @@ class SensorProfileTests(unittest.TestCase):
 
     def test_web_launcher_displays_complete_resolved_profile(self) -> None:
         summary = sensor_profile_summary(EMG_IMU_PROFILE)
-        self.assertEqual(summary["emg_fs_hz"], 1600)
+        self.assertEqual(summary["emg_fs_hz"], 1000)
         self.assertEqual(summary["emg_bandpass_high_hz"], 450)
         self.assertEqual(summary["ecg_mains_notch_hz"], "60")
         self.assertEqual(summary["eda_frequency_hz"], 0)
@@ -397,7 +406,7 @@ class SensorProfileTests(unittest.TestCase):
                     0,
                 )
             displayed = serve.call_args.kwargs["configuration_summary"]
-            self.assertEqual(displayed["emg_fs_hz"], 1600)
+            self.assertEqual(displayed["emg_fs_hz"], 1000)
             self.assertEqual(displayed["ppg_sps"], 200)
             self.assertFalse(displayed["ppg_enabled"])
             self.assertTrue(displayed["imu_enabled"])

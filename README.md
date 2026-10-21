@@ -264,8 +264,12 @@ sifi-capture recording.capture.duckdb --capture-id session-001 `
   --sensor-profile sensors.json
 ```
 
+The default EMG rate is 1000 Hz. This avoids the 1600 Hz firmware issue reported
+by the manufacturer. Use `--emg-fs 2000` for the other safe rate confirmed by the
+manufacturer; 1600 Hz remains available only through explicit configuration.
+
 Frequent state and rate settings can be overridden directly with `--ecg on`,
-`--emg-fs 1600`, `--ppg-sps 200`, and `--ppg-avg 4`. PPG has no `fs` setting:
+`--emg-fs 1000`, `--ppg-sps 200`, and `--ppg-avg 4`. PPG has no `fs` setting:
 its effective output rate is `sps / avg`, so the default is `200 / 4 = 50 Hz`.
 Sensor profile options are hardware-only and cannot be combined with
 `--synthetic`.

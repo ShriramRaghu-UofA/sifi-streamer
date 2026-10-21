@@ -97,7 +97,7 @@ class EcgConfiguration:
 @dataclass(frozen=True, slots=True)
 class EmgConfiguration:
     enabled: bool = True
-    sample_rate_hz: int = 1600
+    sample_rate_hz: int = 1000
     filters: FilterConfiguration = FilterConfiguration(
         True, MainsNotch.HZ_60, True, 20, 450
     )
