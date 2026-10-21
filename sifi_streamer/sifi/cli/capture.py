@@ -13,6 +13,7 @@ from sifi_streamer.capture.runners import (
     run_until_interrupt,
 )
 from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE, BridgeTransport
+from sifi_streamer.sifi.cli.device_options import add_device_arguments, resolve_devices
 from sifi_streamer.sifi.cli.sensor_options import (
     add_sensor_arguments,
     resolve_sensor_profile,
@@ -26,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Write an authoritative SiFi capture log."
     )
-    parser.add_argument("output", type=Path, help="New .capture.jsonl.zst output path")
+    parser.add_argument("output", type=Path, help="New .capture.duckdb output path")
     parser.add_argument("--capture-id", required=True)
     parser.add_argument("--attribute", action="append", default=[], metavar="KEY=VALUE")
     mode = parser.add_mutually_exclusive_group()
@@ -37,11 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bridge-executable", type=Path, default=DEFAULT_BRIDGE_EXECUTABLE
     )
-    parser.add_argument(
-        "--device-handle",
-        metavar="HANDLE",
-        help="BLE name, MAC (Windows/Linux), or UUID (macOS); default: auto-connect",
-    )
+    add_device_arguments(parser)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument(
@@ -75,11 +72,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--duration must be finite and positive")
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
-    if args.synthetic and args.device_handle is not None:
-        parser.error("--device-handle cannot be used with --synthetic")
+    if args.synthetic and (args.device_handle is not None or args.device is not None):
+        parser.error("--device and --device-handle cannot be used with --synthetic")
     if args.synthetic and sensor_options_used(args):
         parser.error("sensor profile options cannot be used with --synthetic")
     try:
+        device_handles = resolve_devices(args.device)
         sensor_profile = None if args.synthetic else resolve_sensor_profile(args)
     except (OSError, TypeError, ValueError) as exc:
         parser.error(str(exc))
@@ -89,6 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parse_attributes(args.attribute),
         bridge_executable=args.bridge_executable,
         device_handle=args.device_handle,
+        device_handles=device_handles,
         host=args.host,
         port=args.port,
         transport=args.transport,

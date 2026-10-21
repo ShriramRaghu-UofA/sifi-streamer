@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from sifi_streamer.capture import (
     Attributes,
@@ -29,6 +30,9 @@ class Backend:
     def stop(self, reason: str = "normal_completion") -> None:
         self.events.append(("stop", reason))
 
+    def quiesce(self) -> None:
+        self.events.append(("quiesce", None))
+
     def start_segment(self, segment_id: str, kind: str, attributes: Attributes) -> None:
         self.events.append(("segment_start", (segment_id, kind, dict(attributes))))
 
@@ -42,6 +46,37 @@ class Backend:
 
 
 class ControllerTests(unittest.TestCase):
+    def test_close_rejects_external_annotations_before_quiescing(self) -> None:
+        backend = Backend()
+        controller = CaptureController(backend)
+        controller.start()
+        controller.start_segment("open", "phase")
+
+        def quiesce() -> None:
+            with self.assertRaises(RuntimeError):
+                controller.marker("late", "example")
+
+        with patch.object(backend, "quiesce", side_effect=quiesce):
+            controller.close()
+        self.assertIn(("segment_stop", ("open", "completed")), backend.events)
+        with self.assertRaises(RuntimeError):
+            controller.start()
+
+    def test_failed_quiesce_still_aborts_segments_and_finalizes(self) -> None:
+        backend = Backend()
+        controller = CaptureController(backend)
+        controller.start()
+        controller.start_segment("open", "phase")
+        with (
+            patch.object(backend, "quiesce", side_effect=RuntimeError("device stuck")),
+            self.assertRaisesRegex(RuntimeError, "device stuck"),
+        ):
+            controller.close()
+        self.assertIn(("segment_stop", ("open", "aborted")), backend.events)
+        self.assertEqual(backend.events[-1], ("stop", "acquisition_failure"))
+        controller.close()
+        self.assertFalse(controller.started)
+
     def test_before_start_and_duplicate_rejection(self) -> None:
         controller = CaptureController(Backend())
         with self.assertRaises(RuntimeError):
@@ -64,6 +99,7 @@ class ControllerTests(unittest.TestCase):
                 ("start", None),
                 ("segment_start", ("outer", "phase", {})),
                 ("segment_start", ("inner", "phase", {})),
+                ("quiesce", None),
                 ("segment_stop", ("inner", "completed")),
                 ("segment_stop", ("outer", "completed")),
                 ("stop", "normal_completion"),

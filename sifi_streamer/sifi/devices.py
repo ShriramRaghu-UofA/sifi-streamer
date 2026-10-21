@@ -61,6 +61,8 @@ class ModalitySpec:
             float(self.sample_rate),
             self.dtype,
             label,
+            source_clock="SiFi device timestamp",
+            timestamp_unit="seconds",
         )
 
 
@@ -284,7 +286,21 @@ class SiFiPacket:
     @property
     def stream_id(self) -> StreamId | None:
         """Return the generic stream identifier for known and custom packet types."""
-        return self.packet_type or None
+        return self.packet_type if self.modality is not None else None
+
+    @property
+    def validity(self) -> dict[str, list[bool]]:
+        """Map SiFi missing/non-finite values to explicit invalid measurements."""
+        return {
+            channel: [
+                value is not None
+                and isinstance(value, int | float)
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                for value in values
+            ]
+            for channel, values in self.data.items()
+        }
 
     @property
     def reported_rate_hz(self) -> float | None:
@@ -310,11 +326,6 @@ class SiFiPacket:
                 "status": self.status,
             }
         )
-
-    @property
-    def capture_context_key(self) -> str | None:
-        """Retain the latest Start Time document across capture boundaries."""
-        return "sifi.start_time" if self.packet_type == "start_time" else None
 
 
 @runtime_checkable
@@ -459,6 +470,12 @@ class SiFiBandDevice:
                 with contextlib.suppress(OSError):
                     resource.close()
 
+    def request_stop(self) -> None:
+        """Wake a pending socket read; final resource cleanup follows."""
+        reader = self._file
+        if isinstance(reader, _SocketLineReader):
+            reader.close()
+
     def read_packet(self) -> SiFiPacket:
         """Return the next decodable packet, skipping malformed lines.
 
@@ -499,6 +516,7 @@ class SyntheticSiFiDevice:
             0.0,
             False,
         )
+        self._stop = threading.Event()
 
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
@@ -521,10 +539,16 @@ class SyntheticSiFiDevice:
     def connect(self) -> None:
         """Reset generated time to zero and enable packet reads."""
         self._t, self._connected = 0.0, True
+        self._stop.clear()
 
     def disconnect(self) -> None:
         """Disable packet reads."""
         self._connected = False
+        self._stop.set()
+
+    def request_stop(self) -> None:
+        """Wake the generated sample wait."""
+        self._stop.set()
 
     def read_packet(self) -> SiFiPacket:
         """Wait one sample interval and return the next EMG packet.
@@ -536,7 +560,8 @@ class SyntheticSiFiDevice:
             raise DeviceError(
                 "SyntheticSiFiDevice.read_packet() called before connect()"
             )
-        time.sleep(1 / self._rate)
+        if self._stop.wait(1 / self._rate):
+            raise DeviceError("synthetic acquisition stopped")
         self._t += 1 / self._rate
         values = (
             self._amplitude * np.sin(2 * np.pi * np.linspace(5, 40, 8) * self._t)

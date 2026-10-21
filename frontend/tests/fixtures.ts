@@ -9,7 +9,7 @@ export function bootstrap(): Bootstrap {
     device_summary: {},
     launch_configuration: {},
     error: null,
-    output: 'C:\\captures\\pilot.capture.jsonl.zst',
+    output: 'C:\\captures\\pilot.capture.duckdb',
     configuration: {
       device: 'SiFi bridge',
       transport: 'stdout',
@@ -116,6 +116,7 @@ export async function mockSession(page: Page) {
           launch_configuration: session.launch_configuration,
           error: null,
           health: health(count),
+          recorder: null,
           active_segments: session.active_segments,
           kinds: session.kinds,
           thresholds: session.thresholds,

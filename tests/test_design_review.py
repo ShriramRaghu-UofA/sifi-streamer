@@ -6,18 +6,15 @@ from unittest.mock import MagicMock, Mock, patch
 
 from sifi_streamer.acquisition.backend import AcquisitionCaptureBackend
 from sifi_streamer.acquisition.config import StreamerConfig
-from sifi_streamer.acquisition.handle import BackgroundHandle
-from sifi_streamer.acquisition.ipc import Ready, StreamInfo
 from sifi_streamer.acquisition.reader import SharedMemoryReader
 from sifi_streamer.acquisition.worker.acquisition import AcquisitionThread
 from sifi_streamer.capture import (
     CaptureController,
     CaptureDecodeError,
-    CaptureLogReader,
     CaptureLogWriter,
     run_timed_capture,
 )
-from sifi_streamer.exceptions import AckTimeoutError, DeviceError
+from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi.bridge import SiFiBridgeDevice
 from sifi_streamer.sifi.devices import SyntheticSiFiDevice
 from sifi_streamer.sifi.sensor_profile import sensor_profile_from_dict
@@ -90,97 +87,19 @@ class DesignReviewTests(unittest.TestCase):
 
     def test_invalid_capture_id_does_not_create_a_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "test.capture.jsonl.zst"
+            path = Path(temporary) / "test.capture.duckdb"
             with self.assertRaises(CaptureDecodeError):
                 CaptureLogWriter(path, "")
             self.assertFalse(path.exists())
 
-    def test_failed_writer_initialization_closes_file(self) -> None:
-        file = Mock()
-        with (
-            patch.object(Path, "open", return_value=file),
-            patch.object(
-                CaptureLogWriter, "_append", side_effect=OSError("disk failure")
-            ),
-            self.assertRaisesRegex(OSError, "disk failure"),
-        ):
-            CaptureLogWriter(Path("unused"), "capture")
-        file.close.assert_called_once()
-
-    def test_invalid_segment_stop_preserves_active_segment(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "test.capture.jsonl.zst"
-            with CaptureLogWriter(path, "capture") as writer:
-                writer.start_segment("segment", "kind")
-                with (
-                    patch(
-                        "sifi_streamer.capture.records.encode_record",
-                        side_effect=CaptureDecodeError("invalid record"),
-                    ),
-                    self.assertRaises(CaptureDecodeError),
-                ):
-                    writer.stop_segment("segment", "completed")
-                writer.stop_segment("segment", "completed")
-            self.assertEqual(len(list(CaptureLogReader(path))), 4)
-
     def test_thread_can_be_joined_after_stopping(self) -> None:
         stopped = threading.Event()
         stopped.set()
-        thread = AcquisitionThread(SyntheticSiFiDevice(), lambda _: None, stopped)
+        thread = AcquisitionThread(SyntheticSiFiDevice(), lambda *_: None, stopped)
         thread.start()
         thread.join(timeout=1)
         self.assertFalse(thread.is_alive())
         self.assertIsNone(thread.failure)
-
-    def test_handle_partial_attachment_closes_readers_and_worker(self) -> None:
-        context = Mock()
-        process = context.Process.return_value
-        process.is_alive.return_value = False
-        first_reader = Mock()
-        ready = Ready(
-            tuple(
-                StreamInfo(name, name, 16, ("value",), 10, "<f4")
-                for name in ("first", "second")
-            ),
-            {},
-        )
-        with (
-            patch(
-                "sifi_streamer.acquisition.handle.multiprocessing.get_context",
-                return_value=context,
-            ),
-            patch(
-                "sifi_streamer.acquisition.handle.SharedMemoryReader",
-                side_effect=[first_reader, ValueError("bad layout")],
-            ),
-        ):
-            handle = BackgroundHandle(StreamerConfig(), SyntheticSiFiDevice)
-            with (
-                patch.object(handle, "_wait_ack", return_value=ready),
-                self.assertRaisesRegex(ValueError, "bad layout"),
-            ):
-                handle.__enter__()
-            first_reader.close.assert_called_once()
-            process.join.assert_called_once_with(timeout=5)
-            self.assertFalse(handle._entered)
-            self.assertEqual(handle._stream_readers, {})
-
-    def test_handle_startup_timeout_terminates_worker(self) -> None:
-        context = Mock()
-        process = context.Process.return_value
-        process.is_alive.return_value = True
-        with patch(
-            "sifi_streamer.acquisition.handle.multiprocessing.get_context",
-            return_value=context,
-        ):
-            handle = BackgroundHandle(StreamerConfig(), SyntheticSiFiDevice)
-            with (
-                patch.object(handle, "_wait_ack", return_value=None),
-                self.assertRaises(AckTimeoutError),
-            ):
-                handle.__enter__()
-            process.terminate.assert_called_once()
-            self.assertFalse(handle._entered)
 
     def test_reader_releases_attachment_after_invalid_layout(self) -> None:
         attachment = Mock()
@@ -212,8 +131,8 @@ class DesignReviewTests(unittest.TestCase):
             ),
             ("ack_timeout_s", lambda value: StreamerConfig(ack_timeout_s=value)),
             (
-                "capture_flush_interval_s",
-                lambda value: StreamerConfig(capture_flush_interval_s=value),
+                "commit_interval_s",
+                lambda value: StreamerConfig(commit_interval_s=value),
             ),
         ):
             for value in (float("nan"), float("inf"), float("-inf")):

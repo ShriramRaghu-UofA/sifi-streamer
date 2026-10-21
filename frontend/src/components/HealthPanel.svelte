@@ -65,6 +65,33 @@
 </script>
 
 <section class="space-y-6">
+  {#if dashboard.live?.recorder}
+    {@const recorder = dashboard.live.recorder}
+    <section class="panel space-y-3" aria-label="Recording progress">
+      <h3 class="font-semibold">Recording progress</h3>
+      <dl class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+        <div>
+          <dt class="muted">Accepted events</dt>
+          <dd>{recorder.accepted_events}</dd>
+        </div>
+        <div>
+          <dt class="muted">Committed events</dt>
+          <dd>{recorder.committed_events}</dd>
+        </div>
+        <div>
+          <dt class="muted">Uncommitted bytes</dt>
+          <dd>{recorder.pending_bytes}</dd>
+        </div>
+        <div>
+          <dt class="muted">Oldest uncommitted</dt>
+          <dd>{recorder.oldest_uncommitted_age_s.toFixed(2)} s</dd>
+        </div>
+      </dl>
+      <p class="muted text-sm">
+        Accepted events may still be buffered. Closing a capture waits for its final commit.
+      </p>
+    </section>
+  {/if}
   <div>
     <p class="eyebrow">Quality at a glance</p>
     <h2 class="h3 mt-2">Signal health</h2>

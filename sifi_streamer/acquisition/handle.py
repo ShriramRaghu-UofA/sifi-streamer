@@ -1,10 +1,14 @@
-"""Foreground context-manager API over the background process."""
+"""Foreground owner of a recorder and a fixed collection of device workers."""
 
 import logging
 import multiprocessing
 import queue
+import threading
+import time
 import uuid
-from multiprocessing import Queue
+from collections.abc import Mapping
+from dataclasses import dataclass
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Self
 
@@ -12,217 +16,83 @@ from sifi_streamer.acquisition.config import StreamerConfig
 from sifi_streamer.acquisition.devices import DeviceFactory
 from sifi_streamer.acquisition.health import RawHealthSnapshot, WorkerFatal
 from sifi_streamer.acquisition.ipc import (
-    AddCaptureEvent,
-    AddMarker,
-    CaptureEventAdded,
-    CaptureStarted,
-    CaptureStopped,
+    CaptureConfiguration,
+    DeviceInfoUpdate,
     ErrorAck,
-    MarkerAdded,
+    ProcessSignal,
     Ready,
-    SegmentStarted,
-    SegmentStopped,
-    Shutdown,
-    StartCapture,
-    StartSegment,
-    StopCapture,
-    StopSegment,
     StreamInfo,
+    WorkerStopped,
 )
 from sifi_streamer.acquisition.reader import SharedMemoryReader
 from sifi_streamer.acquisition.worker.process import background_main
 from sifi_streamer.capture.events import CaptureEvent
+from sifi_streamer.capture.recorder import RecorderHandle, RecorderStatus
 from sifi_streamer.capture.records import Attributes, Packet, validate_document
+from sifi_streamer.capture.transport import MessageChannel, RecorderConfig
 from sifi_streamer.exceptions import AckError, AckTimeoutError, RecordingError
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class _Worker:
+    device_id: str
+    process: BaseProcess
+    stop: ProcessSignal
+    acknowledgements: MessageChannel[Ready | WorkerStopped | ErrorAck]
+    health: MessageChannel[RawHealthSnapshot]
+    fatal: MessageChannel[WorkerFatal]
+    reports: MessageChannel[DeviceInfoUpdate]
+    ready: bool = False
+
+
 class BackgroundHandle:
-    """Own one spawned acquisition worker and its live shared-memory readers.
+    """Own one recorder plus one spawned worker per named device.
 
-    Use this class as a context manager. Entering starts the worker, waits for its
-    ready acknowledgement, and attaches readers. Exiting requests orderly
-    shutdown, then terminates a worker that does not exit promptly. The worker
-    owns the device, shared-memory blocks, ring buffers, and recorder.
-
-    Args:
-        config: Settings shared with the worker process.
-        device_factory: Picklable zero-argument factory invoked in the worker.
-        background_log_level: Logging level configured inside the worker.
+    A capture must be prepared before entry. A single factory is shorthand for
+    ``{"device": factory}``; all paths use the same multi-device implementation.
     """
 
     def __init__(
         self,
         config: StreamerConfig,
-        device_factory: DeviceFactory,
+        device_factory: DeviceFactory | Mapping[str, DeviceFactory],
         *,
         background_log_level: int = logging.INFO,
     ) -> None:
-        self._config = config
-        context = multiprocessing.get_context("spawn")
-        self._cmd_queue: Queue = context.Queue()
-        self._ack_queue: Queue = context.Queue()
-        self._health_queue: Queue = context.Queue(maxsize=1)
-        self._device_info_queue: Queue = context.Queue()
-        self._startup_capture: StartCapture | None = None
-        self._fatal_queue: Queue = context.Queue()
-        self._process_kwargs: dict[str, object] = {
-            "config": config,
-            "device_factory": device_factory,
-            "cmd_queue": self._cmd_queue,
-            "ack_queue": self._ack_queue,
-            "health_queue": self._health_queue,
-            "fatal_queue": self._fatal_queue,
-            "device_info_queue": self._device_info_queue,
-            "shm_prefix": f"acq_{uuid.uuid4().hex[:12]}",
-            "log_level": background_log_level,
-        }
-        self._process = context.Process(
-            target=background_main,
-            kwargs=self._process_kwargs,
-            daemon=True,
-            name="acquisition-worker",
+        devices = (
+            dict(device_factory)
+            if isinstance(device_factory, Mapping)
+            else {"device": device_factory}
         )
+        if not devices:
+            raise ValueError("at least one device factory is required")
+        if any(not name or name != name.strip() or "/" in name for name in devices):
+            raise ValueError("device IDs must be non-empty trimmed strings without '/'")
+        self._config = config
+        self._factories = devices
+        self._log_level = background_log_level
+        self._startup_capture: CaptureConfiguration | None = None
+        self._recorder: RecorderHandle | None = None
+        self._recorder_status: RecorderStatus | None = None
+        self._workers: dict[str, _Worker] = {}
         self._stream_readers: dict[str, SharedMemoryReader] = {}
         self._streams: tuple[StreamInfo, ...] = ()
-        self._device_info: dict[str, object] = {}
-        self._device_info_revision = 0
+        self._device_infos: dict[str, dict[str, object]] = {}
+        self._report_revisions: dict[str, int] = {}
+        self._latest_health: dict[str, RawHealthSnapshot] = {}
+        self._fatal_events: queue.Queue[WorkerFatal] = queue.Queue()
+        self._failure: WorkerFatal | None = None
+        self._recorder_failed = False
+        self._incomplete_producers = False
         self._entered = False
-
-    def __enter__(self) -> Self:
-        """Start the worker and attach live readers.
-
-        Returns:
-            This entered handle. Re-entering an active handle is a no-op.
-
-        Raises:
-            AckError: If worker initialization reports a specific failure.
-            AckTimeoutError: If the worker is not ready within 30 seconds.
-        """
-        if self._entered:
-            return self
-        if self._startup_capture is not None:
-            self._process_kwargs["startup_capture"] = self._startup_capture
-            self._process = multiprocessing.get_context("spawn").Process(
-                target=background_main,
-                kwargs=self._process_kwargs,
-                daemon=True,
-                name="acquisition-worker",
-            )
-        self._process.start()
-        logger.info("Started acquisition worker process (pid=%s)", self._process.pid)
-        try:
-            return self._attach_readers()
-        except BaseException:
-            self._shutdown()
-            raise
-
-    def _attach_readers(self) -> Self:
-        """Wait for startup and attach readers under the entry cleanup boundary."""
-        ack = self._wait_ack(timeout=30)
-        if isinstance(ack, Ready):
-            self._streams, self._device_info = ack.streams, ack.device_info
-            self._device_info_revision = ack.device_info_revision
-            for info in ack.streams:
-                reader = SharedMemoryReader(
-                    info.shm_name,
-                    info.n_samples,
-                    info.n_channels,
-                    dtype=info.payload_dtype,
-                )
-                self._stream_readers[info.stream_id] = reader
-            self._entered = True
-            logger.info("Acquisition worker ready with %d stream(s)", len(ack.streams))
-            return self
-        logger.error("Acquisition worker failed before becoming ready")
-        if isinstance(ack, ErrorAck):
-            raise AckError(f"Background process failed during startup: {ack.message}")
-        raise AckTimeoutError("Background process did not send Ready within 30s")
-
-    def __exit__(self, *_: object) -> None:
-        """Stop the worker and close all attached readers."""
-        if not self._entered:
-            return
-        self._shutdown()
-
-    def _shutdown(self) -> None:
-        """Release the started process and any readers, including partial entry."""
-        try:
-            self._cmd_queue.put(Shutdown())
-            self._process.join(timeout=5)
-        finally:
-            if self._process.is_alive():
-                logger.warning(
-                    "Acquisition worker did not stop in time; terminating it"
-                )
-                self._process.terminate()
-                self._process.join(timeout=2)
-            for reader in self._stream_readers.values():
-                reader.close()
-            (
-                self._stream_readers,
-                self._streams,
-                self._entered,
-            ) = (
-                {},
-                (),
-                False,
-            )
-            logger.info("Acquisition worker and shared-memory readers closed")
-
-    @property
-    def streams(self) -> tuple[StreamInfo, ...]:
-        """Return every declared generic stream while entered."""
-        if not self._entered:
-            raise RuntimeError("streams are available only inside the context manager")
-        return self._streams
-
-    @property
-    def stream_readers(self) -> dict[str, SharedMemoryReader]:
-        """Return a copy of the dynamic stream-to-reader mapping."""
-        if not self._entered:
-            raise RuntimeError(
-                "stream_readers are available only inside the context manager"
-            )
-        return dict(self._stream_readers)
-
-    def poll_health(self) -> RawHealthSnapshot | None:
-        """Return the newest available cumulative health snapshot without blocking."""
-        latest = None
-        while True:
-            try:
-                latest = self._health_queue.get_nowait()
-            except queue.Empty:
-                return latest
-
-    def poll_fatal(self) -> WorkerFatal | None:
-        """Return one reliable worker fatal event without blocking."""
-        try:
-            return self._fatal_queue.get_nowait()
-        except queue.Empty:
-            return None
-
-    @property
-    def device_info(self) -> dict[str, object]:
-        """Return a defensive snapshot of the latest explicit device report."""
-        while True:
-            try:
-                update = self._device_info_queue.get_nowait()
-                if update.revision > self._device_info_revision:
-                    self._device_info = update.info
-                    self._device_info_revision = update.revision
-            except queue.Empty:
-                return validate_document(self._device_info)
-
-    @property
-    def launch_configuration(self) -> dict[str, object]:
-        """Resolved settings supplied to the worker, retained after closure."""
-        return validate_document(
-            self._startup_capture.configuration
-            if self._startup_capture is not None
-            else {}
-        )
+        self._attempted = False
+        self._devices_stopped = False
+        self._closed = False
+        self._supervisor_stop = threading.Event()
+        self._supervisor: threading.Thread | None = None
+        self._shutdown_lock = threading.RLock()
 
     def prepare_capture(
         self,
@@ -231,53 +101,315 @@ class BackgroundHandle:
         attributes: Attributes,
         configuration: Packet,
     ) -> None:
-        """Arrange worker-owned recording before hardware startup."""
-        if self._entered or self._process.pid is not None:
+        if self._attempted:
             raise RuntimeError("capture must be prepared before worker startup")
-        self._startup_capture = StartCapture(
+        self._startup_capture = CaptureConfiguration(
             capture_file, capture_id, dict(attributes), validate_document(configuration)
         )
 
-    def record_event(self, event: CaptureEvent) -> None:
-        """Persist an explicit event and wait for acknowledgement."""
-        if not self._entered:
-            raise RuntimeError("capture events require an entered handle")
-        from sifi_streamer.capture.events import copy_event
-
-        self._cmd_queue.put(AddCaptureEvent(copy_event(event)))
-        self._expect(CaptureEventAdded, "record_event")
-
-    def start_capture(
-        self, capture_file: Path, capture_id: str, attributes: Attributes | None = None
-    ) -> None:
-        """Create and start an authoritative capture in the worker.
-
-        The mapping is copied before crossing the process boundary. This method
-        returns only after the worker acknowledges creation.
-        """
-        self._cmd_queue.put(
-            StartCapture(capture_file, capture_id, dict(attributes or {}))
+    def __enter__(self) -> Self:
+        if self._entered:
+            return self
+        if self._attempted:
+            raise RuntimeError("an acquisition handle cannot be restarted")
+        if self._startup_capture is None:
+            raise RuntimeError("prepare_capture must precede acquisition startup")
+        self._attempted = True
+        capture = self._startup_capture
+        config = self._config
+        context = multiprocessing.get_context("spawn")
+        recorder_config = RecorderConfig(
+            commit_interval_s=config.commit_interval_s,
+            transaction_target_bytes=config.transaction_target_bytes,
+            producer_buffer_bytes=config.producer_buffer_bytes,
+            max_submission_bytes=config.max_submission_bytes,
+            enqueue_timeout_s=config.enqueue_timeout_s,
+            shutdown_timeout_s=config.shutdown_timeout_s,
         )
-        self._expect(CaptureStarted, "start_capture")
+        self._recorder = RecorderHandle(
+            capture.capture_file,
+            capture.capture_id,
+            capture.attributes,
+            configuration=capture.configuration,
+            producer_devices={
+                "foreground": None,
+                **{f"device:{name}": name for name in self._factories},
+            },
+            config=recorder_config,
+        )
+        try:
+            self._recorder.start()
+            gate = ProcessSignal(context.Semaphore(0), readers=len(self._factories))
+            for name, factory in self._factories.items():
+                self._recorder.register_device(
+                    name,
+                    integration=getattr(factory, "__name__", type(factory).__name__),
+                )
+                acknowledgements, health, fatal, reports = (
+                    MessageChannel[Ready | WorkerStopped | ErrorAck].create(
+                        context,
+                        capacity_bytes=max(4 * config.max_submission_bytes, 64 << 10),
+                        max_message_bytes=config.max_submission_bytes,
+                        timeout_s=config.enqueue_timeout_s,
+                    ),
+                    MessageChannel[RawHealthSnapshot].create(
+                        context,
+                        capacity_bytes=512 << 10,
+                        max_message_bytes=256 << 10,
+                        timeout_s=config.enqueue_timeout_s,
+                    ),
+                    MessageChannel[WorkerFatal].create(
+                        context,
+                        capacity_bytes=64 << 10,
+                        max_message_bytes=16 << 10,
+                        timeout_s=config.enqueue_timeout_s,
+                    ),
+                    MessageChannel[DeviceInfoUpdate].create(
+                        context,
+                        capacity_bytes=max(2 * config.max_submission_bytes, 64 << 10),
+                        max_message_bytes=config.max_submission_bytes,
+                        timeout_s=config.enqueue_timeout_s,
+                    ),
+                )
+                stop = ProcessSignal(context.Semaphore(0))
+                process = context.Process(
+                    target=background_main,
+                    kwargs={
+                        "config": config,
+                        "device_factory": factory,
+                        "device_id": name,
+                        "producer": self._recorder.producer(f"device:{name}"),
+                        "start_event": gate,
+                        "stop_event": stop,
+                        "ack_queue": acknowledgements,
+                        "health_queue": health,
+                        "fatal_queue": fatal,
+                        "device_info_queue": reports,
+                        "shm_prefix": f"acq_{uuid.uuid4().hex[:12]}",
+                        "log_level": self._log_level,
+                    },
+                    name=f"acquisition-{name}",
+                )
+                worker = _Worker(
+                    name, process, stop, acknowledgements, health, fatal, reports
+                )
+                self._workers[name] = worker
+                process.start()
+            infos: list[StreamInfo] = []
+            for worker in self._workers.values():
+                ready = self._wait_ready(worker)
+                worker.ready = True
+                infos.extend(ready.streams)
+                self._device_infos[worker.device_id] = ready.device_info
+                self._report_revisions[worker.device_id] = ready.device_info_revision
+                for spec in ready.registry:
+                    self._recorder.register_stream(worker.device_id, spec)
+                for info in ready.streams:
+                    self._stream_readers[info.stream_id] = SharedMemoryReader(
+                        info.shm_name,
+                        info.n_samples,
+                        info.n_channels,
+                        dtype=info.payload_dtype,
+                    )
+            self._recorder.seal_registration()
+            self._streams = tuple(infos)
+            self._entered = True
+            gate.set()
+            self._supervisor = threading.Thread(
+                target=self._supervise, name="capture-supervisor", daemon=True
+            )
+            self._supervisor.start()
+            return self
+        except BaseException:
+            self._close("startup_failure", raise_failure=False)
+            raise
+
+    def _wait_ready(self, worker: _Worker) -> Ready:
+        deadline = time.monotonic() + self._config.startup_timeout_s
+        while time.monotonic() < deadline:
+            try:
+                message = worker.acknowledgements.get(timeout=0.05)
+            except queue.Empty:
+                if not worker.process.is_alive():
+                    raise AckError(
+                        f"device {worker.device_id} exited during startup"
+                    ) from None
+                self._check_recorder()
+                continue
+            if isinstance(message, Ready):
+                return message
+            if isinstance(message, ErrorAck):
+                raise AckError(
+                    f"device {worker.device_id} startup failed: {message.message}"
+                )
+            raise AckError(
+                f"device {worker.device_id} stopped before registration: {message}"
+            )
+        raise AckTimeoutError(f"device {worker.device_id} startup timed out")
+
+    def _remember_failure(self, failure: WorkerFatal) -> None:
+        if self._failure is None:
+            self._failure = failure
+            self._fatal_events.put(failure)
+
+    def _check_recorder(self) -> None:
+        if self._recorder is not None:
+            failure = self._recorder.poll_failure()
+            if failure is not None:
+                self._recorder_failed = True
+                raise RecordingError(str(failure))
+
+    def _supervise(self) -> None:
+        while not self._supervisor_stop.wait(0.05):
+            try:
+                with self._shutdown_lock:
+                    if self._supervisor_stop.is_set():
+                        return
+                    self._check_recorder()
+                    for worker in self._workers.values():
+                        if not self._devices_stopped and not worker.process.is_alive():
+                            raise RecordingError(
+                                f"device {worker.device_id} exited unexpectedly"
+                            )
+                        try:
+                            failure = worker.fatal.get_nowait()
+                        except queue.Empty:
+                            failure = None
+                        if failure is not None:
+                            self._remember_failure(failure)
+                            raise RecordingError(failure.message)
+            except BaseException as exc:
+                self._remember_failure(WorkerFatal("acquisition_failure", str(exc)))
+                self._close("acquisition_failure", raise_failure=False)
+                return
+
+    def stop_devices(self) -> None:
+        """Finish all producers before permitting recorder finalization."""
+        with self._shutdown_lock:
+            if self._devices_stopped:
+                return
+            self._devices_stopped = True
+            for worker in self._workers.values():
+                worker.stop.set()
+            deadline = time.monotonic() + self._config.shutdown_timeout_s
+            for worker in self._workers.values():
+                if worker.process.pid is None:
+                    continue
+                worker.process.join(max(0, deadline - time.monotonic()))
+                if worker.process.is_alive():
+                    self._incomplete_producers = True
+                    worker.process.terminate()
+                    worker.process.join(2)
+                    self._remember_failure(
+                        WorkerFatal(
+                            "shutdown_failure",
+                            f"device {worker.device_id} did not stop",
+                        )
+                    )
+                if worker.process.exitcode not in (0, None):
+                    self._incomplete_producers = True
+                    self._remember_failure(
+                        WorkerFatal(
+                            "shutdown_failure",
+                            f"device {worker.device_id} exited with "
+                            f"{worker.process.exitcode}",
+                        )
+                    )
+                    continue
+                while True:
+                    try:
+                        stopped = worker.acknowledgements.get_nowait()
+                    except queue.Empty:
+                        break
+                    if isinstance(stopped, WorkerStopped) and stopped.failure:
+                        self._remember_failure(
+                            WorkerFatal("shutdown_failure", stopped.failure)
+                        )
+                    if isinstance(stopped, WorkerStopped):
+                        if not stopped.producer_completed:
+                            self._incomplete_producers = True
+                        self._device_infos[worker.device_id] = stopped.device_info
+                        self._report_revisions[worker.device_id] = (
+                            stopped.device_info_revision
+                        )
+            if self._failure is not None:
+                raise RecordingError(self._failure.message)
+
+    def _close(self, reason: str, *, raise_failure: bool = True) -> None:
+        with self._shutdown_lock:
+            if self._closed:
+                if raise_failure and self._failure:
+                    raise RecordingError(self._failure.message)
+                return
+            self._closed = True
+            self._supervisor_stop.set()
+            try:
+                self.stop_devices()
+            except BaseException as exc:
+                self._remember_failure(WorkerFatal("shutdown_failure", str(exc)))
+            if self._recorder is not None:
+                try:
+                    if self._recorder_failed or self._incomplete_producers:
+                        self._recorder.abort()
+                    else:
+                        for name in self._factories:
+                            worker = self._workers.get(name)
+                            if worker is None or worker.process.pid is None:
+                                self._recorder.producer(f"device:{name}").complete()
+                        final_reason = reason
+                        if self._failure and reason != "startup_failure":
+                            final_reason = "acquisition_failure"
+                        self._recorder.stop(final_reason)
+                except BaseException as exc:
+                    self._remember_failure(WorkerFatal("recorder_failure", str(exc)))
+                    try:
+                        self._recorder.abort()
+                    except BaseException as abort_error:
+                        logger.error("Recorder cleanup failed: %s", abort_error)
+            try:
+                self._drain_reports()
+            except BaseException as exc:
+                self._remember_failure(WorkerFatal("shutdown_failure", str(exc)))
+            for reader in self._stream_readers.values():
+                try:
+                    reader.close()
+                except BaseException as exc:
+                    self._remember_failure(WorkerFatal("shutdown_failure", str(exc)))
+            self._stream_readers.clear()
+            self._entered = False
+            if raise_failure and self._failure:
+                raise RecordingError(self._failure.message)
+
+    def __exit__(self, *_: object) -> None:
+        self._close("operator_request")
+        if (
+            self._supervisor is not None
+            and self._supervisor is not threading.current_thread()
+        ):
+            self._supervisor.join(self._config.shutdown_timeout_s)
 
     def stop_capture(self, reason: str = "normal_completion") -> None:
-        """Flush and stop the active capture, waiting without an ACK timeout."""
-        self._cmd_queue.put(StopCapture(reason))
-        self._expect(CaptureStopped, "stop_capture", timeout=None)
+        self._close(reason)
+
+    def _require_recorder(self) -> RecorderHandle:
+        if not self._entered or self._recorder is None or self._closed:
+            raise RuntimeError("capture is not active")
+        if self._failure:
+            raise RecordingError(self._failure.message)
+        return self._recorder
+
+    def record_event(self, event: CaptureEvent) -> None:
+        self._require_recorder().record_event(event)
 
     def start_segment(
         self, segment_id: str, segment_kind: str, attributes: Attributes | None = None
     ) -> None:
-        """Record a segment start and wait for worker acknowledgement."""
-        self._cmd_queue.put(
-            StartSegment(segment_id, segment_kind, dict(attributes or {}))
+        self._require_recorder().start_segment(
+            segment_id, segment_kind, dict(attributes or {})
         )
-        self._expect(SegmentStarted, "start_segment")
 
     def stop_segment(self, segment_id: str, reason: str | None = None) -> None:
-        """Record a segment stop and wait for worker acknowledgement."""
-        self._cmd_queue.put(StopSegment(segment_id, reason))
-        self._expect(SegmentStopped, "stop_segment")
+        self._require_recorder().stop_segment(segment_id, reason or "completed")
 
     def add_marker(
         self,
@@ -288,36 +420,94 @@ class BackgroundHandle:
         source_time_ns: int | None = None,
         source_clock: str | None = None,
     ) -> None:
-        """Record a marker and wait for worker acknowledgement.
-
-        Args follow the stable ``marker_id, marker_kind`` positional order.
-        ``source_time_ns`` may identify time on the optional ``source_clock``.
-        """
-        self._cmd_queue.put(
-            AddMarker(
-                marker_id,
-                marker_kind,
-                dict(attributes or {}),
-                source_time_ns,
-                source_clock,
-            )
+        self._require_recorder().add_marker(
+            marker_id,
+            marker_kind,
+            dict(attributes or {}),
+            source_time_ns=source_time_ns,
+            source_clock=source_clock,
         )
-        self._expect(MarkerAdded, "add_marker")
 
-    def _expect(self, expected: type, name: str, *, timeout: float | None = -1) -> None:
-        ack = self._wait_ack(
-            timeout=self._config.ack_timeout_s if timeout == -1 else timeout
-        )
-        if isinstance(ack, expected):
+    @property
+    def streams(self) -> tuple[StreamInfo, ...]:
+        return self._streams
+
+    @property
+    def stream_readers(self) -> dict[str, SharedMemoryReader]:
+        return dict(self._stream_readers)
+
+    def _drain_reports(self) -> None:
+        if self._closed and not self._entered:
             return
-        if isinstance(ack, ErrorAck):
-            raise RecordingError(f"{name} failed: {ack.message}")
-        if ack is None:
-            raise AckTimeoutError(f"{name} ACK was not received")
-        raise RecordingError(f"Unexpected ACK for {name}: {ack!r}")
+        for name, worker in self._workers.items():
+            if worker.process.pid is None or worker.process.exitcode not in (0, None):
+                continue
+            while True:
+                try:
+                    update: DeviceInfoUpdate = worker.reports.get_nowait()
+                except queue.Empty:
+                    break
+                if update.revision > self._report_revisions.get(name, 0):
+                    self._device_infos[name] = update.info
+                    self._report_revisions[name] = update.revision
 
-    def _wait_ack(self, *, timeout: float | None):
+    @property
+    def device_infos(self) -> dict[str, dict[str, object]]:
+        with self._shutdown_lock:
+            self._drain_reports()
+            return {
+                name: validate_document(info)
+                for name, info in self._device_infos.items()
+            }
+
+    @property
+    def device_info(self) -> dict[str, object]:
+        reports = self.device_infos
+        if len(reports) == 1:
+            return next(iter(reports.values()))
+        return {"devices": reports}
+
+    @property
+    def launch_configuration(self) -> dict[str, object]:
+        return validate_document(
+            self._startup_capture.configuration if self._startup_capture else {}
+        )
+
+    @property
+    def recorder_stats(self) -> RecorderStatus | None:
+        if self._recorder is not None:
+            status = self._recorder.poll_status()
+            if status is not None:
+                self._recorder_status = status
+        return self._recorder_status
+
+    def poll_fatal(self) -> WorkerFatal | None:
         try:
-            return self._ack_queue.get(timeout=timeout)
+            return self._fatal_events.get_nowait()
         except queue.Empty:
             return None
+
+    def poll_health(self) -> RawHealthSnapshot | None:
+        with self._shutdown_lock:
+            return self._poll_health()
+
+    def _poll_health(self) -> RawHealthSnapshot | None:
+        if self._closed:
+            return None
+        for name, worker in self._workers.items():
+            while True:
+                try:
+                    self._latest_health[name] = worker.health.get_nowait()
+                except queue.Empty:
+                    break
+        if not self._latest_health:
+            return None
+        return RawHealthSnapshot(
+            time.monotonic(),
+            self._failure is None and not self._devices_stopped,
+            tuple(
+                stream
+                for snapshot in self._latest_health.values()
+                for stream in snapshot.streams
+            ),
+        )

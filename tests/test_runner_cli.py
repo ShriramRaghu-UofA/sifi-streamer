@@ -8,13 +8,16 @@ from sifi_streamer.capture import (
     parse_scalar,
     run_until_interrupt,
 )
+from sifi_streamer.capture.export import build_parser as build_export_parser
 from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE
 from sifi_streamer.sifi.cli.capture import build_parser
-from sifi_streamer.sifi.cli.export import build_parser as build_export_parser
 from sifi_streamer.web.cli import build_parser as build_web_parser
 
 
 class Backend:
+    def quiesce(self) -> None:
+        pass
+
     def __init__(self) -> None:
         self.events = []
 
@@ -101,9 +104,11 @@ class RunnerTests(unittest.TestCase):
             )
 
     def test_export_cli_help_parser_does_not_import_optional_dependencies(self) -> None:
-        args = build_export_parser().parse_args(["capture.zst", "--force"])
-        self.assertEqual(args.output, None)
-        self.assertTrue(args.force)
+        args = build_export_parser().parse_args(
+            ["capture.capture.duckdb", "tables", "--table", "events"]
+        )
+        self.assertEqual(str(args.output), "tables")
+        self.assertEqual(args.tables, ["events"])
 
 
 if __name__ == "__main__":

@@ -383,7 +383,7 @@ class SensorProfileTests(unittest.TestCase):
         self.assertEqual(summary["imu_accelerometer_range_g"], 16)
         self.assertEqual(summary["temperature_fs_hz"], 1)
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "web.capture.jsonl.zst"
+            output = Path(directory) / "web.capture.duckdb"
             with patch("sifi_streamer.web.cli.serve_capture_web") as serve:
                 self.assertEqual(
                     web_main(

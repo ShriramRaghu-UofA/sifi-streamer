@@ -87,6 +87,14 @@ export type Bootstrap = Provenance & {
 };
 export type Trace = { timestamps: number[]; samples: (number | null)[][] };
 export type Live = Provenance & {
+  recorder: {
+    accepted_events: number;
+    committed_events: number;
+    pending_bytes: number;
+    oldest_uncommitted_age_s: number;
+    producer_pending_bytes: [string, number][];
+    completed_producers: string[];
+  } | null;
   state: Phase;
   error: string | null;
   health: Health | null;

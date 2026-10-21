@@ -17,8 +17,8 @@ uv sync --locked --dev
 ```
 
 Add Python dependencies with `uv add`; do not edit `uv.lock` manually. Keep
-runtime dependencies minimal. Heavy conversion packages belong behind the
-existing `parquet` extra.
+runtime dependencies minimal. DuckDB provides capture and derived Parquet/CSV
+export directly; acquisition and export do not require pandas or PyArrow.
 
 Run Python validation with:
 
@@ -78,7 +78,8 @@ uv build
 Install the wheel into a clean Python 3.14 environment and confirm that:
 
 - `import sifi_streamer` resolves from the installed wheel;
-- `sifi-capture --help` and `sifi-capture-web --help` succeed;
+- `sifi-capture --help`, `sifi-capture-web --help`, and `sifi-capture-export --help`
+  succeed;
 - the packaged dashboard assets are present;
 - a short synthetic capture can be written and read back.
 
@@ -89,8 +90,8 @@ Node modules.
 ## Commits and compatibility
 
 Add regression coverage for meaningful behavior changes. Preserve the
-authoritative append-only schema-v2 capture format unless a schema correction
-is explicitly approved and documented. Keep application-specific vocabulary
+authoritative DuckDB capture schema unless a change is explicitly approved and
+documented. Keep application-specific vocabulary
 and artifact policy in consumer repositories.
 
 Do not create commits unless the task explicitly requests one. Release tags

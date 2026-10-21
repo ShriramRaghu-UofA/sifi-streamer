@@ -1,4 +1,4 @@
-"""Background acquisition process entry point."""
+"""Device worker: fixed stream registration, bounded recording, and live rings."""
 
 import contextlib
 import logging
@@ -7,157 +7,92 @@ import queue
 import signal
 import threading
 import time
-from multiprocessing import Queue
 from multiprocessing.shared_memory import SharedMemory
 
 import numpy as np
 
 from sifi_streamer.acquisition.config import StreamerConfig
-from sifi_streamer.acquisition.devices import (
-    AcquisitionDevice,
-    AcquisitionPacket,
-    DeviceFactory,
-    SignalStreamSpec,
-)
+from sifi_streamer.acquisition.devices import AcquisitionPacket, DeviceFactory
 from sifi_streamer.acquisition.events import CaptureEventSource
-from sifi_streamer.acquisition.health import WorkerFatal, WorkerHealthCollector
+from sifi_streamer.acquisition.health import (
+    RawHealthSnapshot,
+    WorkerFatal,
+    WorkerHealthCollector,
+)
 from sifi_streamer.acquisition.ipc import (
     DeviceInfoUpdate,
     ErrorAck,
+    ProcessSignal,
     Ready,
-    StartCapture,
     StreamInfo,
+    WorkerStopped,
 )
 from sifi_streamer.acquisition.ring_buffer import SeqlockRingBuffer
 from sifi_streamer.acquisition.worker.acquisition import AcquisitionThread
-from sifi_streamer.acquisition.worker.command_handler import CommandHandler
-from sifi_streamer.acquisition.worker.recorder import RecorderFSM
-from sifi_streamer.capture.events import (
-    CaptureEvent,
-    DeviceInfoEvent,
-    DiagnosticEvent,
-)
-from sifi_streamer.capture.records import validate_document
-from sifi_streamer.exceptions import DeviceError
+from sifi_streamer.capture.events import CaptureEvent, DeviceInfoEvent, DiagnosticEvent
+from sifi_streamer.capture.records import validate_document, validate_sample_value
+from sifi_streamer.capture.transport import MessageChannel, ProducerEndpoint
 
 logger = logging.getLogger(__name__)
 
 
 def _ignore_console_interrupts() -> None:
-    """Leave console Ctrl+C ownership with the foreground launcher."""
+    """The foreground launcher alone handles console Ctrl+C."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def background_main(
     config: StreamerConfig,
     device_factory: DeviceFactory,
-    cmd_queue: Queue,
-    ack_queue: Queue,
+    device_id: str,
+    producer: ProducerEndpoint,
+    start_event: ProcessSignal,
+    stop_event: ProcessSignal,
+    ack_queue: MessageChannel[Ready | WorkerStopped | ErrorAck],
     shm_prefix: str,
-    *,
+    health_queue: MessageChannel[RawHealthSnapshot],
+    fatal_queue: MessageChannel[WorkerFatal],
+    device_info_queue: MessageChannel[DeviceInfoUpdate],
     log_level: int = logging.INFO,
-    health_queue: Queue | None = None,
-    fatal_queue: Queue | None = None,
-    startup_capture: StartCapture | None = None,
-    device_info_queue: Queue | None = None,
 ) -> None:
-    """Run device acquisition, shared-memory publication, and capture recording.
-
-    This is the spawned worker entry point. It owns the device, shared-memory
-    blocks, ring buffers, acquisition thread, and recorder for their full
-    lifetimes, and reports startup success or failure through ``ack_queue``.
-
-    Args:
-        config: Shared-memory and recording settings.
-        device_factory: Factory invoked in this process to create the device.
-        cmd_queue: Commands from the foreground handle.
-        ack_queue: Startup and command acknowledgements to the foreground.
-        shm_prefix: Unique prefix for per-stream shared-memory names.
-        log_level: Worker root logging level.
-    """
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    """Own one device until final submissions and producer completion are sent."""
+    logging.basicConfig(level=log_level)
     _ignore_console_interrupts()
-    logger.info("Acquisition worker starting")
-    recorder = RecorderFSM(config, None)
+    device = None
+    acquisition = None
+    rings: dict[str, SeqlockRingBuffer] = {}
+    shms: dict[str, SharedMemory] = {}
     latest_info: dict[str, object] = {}
+    revision = 0
     report_received = False
-    report_revision = 0
+    local_stop = threading.Event()
+    startup = True
+    failure: BaseException | None = None
     report_lock = threading.Lock()
 
     def emit(event: CaptureEvent) -> None:
-        nonlocal latest_info, report_received, report_revision
+        nonlocal latest_info, revision, report_received
         with report_lock:
-            recorder.record_event(event)
+            producer.record_event(event)
             if isinstance(event, DeviceInfoEvent):
                 latest_info = validate_document(event.info)
+                revision += 1
                 report_received = True
-                report_revision += 1
-                if device_info_queue is not None:
-                    device_info_queue.put(
-                        DeviceInfoUpdate(report_revision, latest_info)
-                    )
+                update = DeviceInfoUpdate(revision, latest_info, device_id)
+                with contextlib.suppress(queue.Full):
+                    device_info_queue.put_nowait(update)
 
-    if startup_capture is not None:
-        try:
-            recorder.start_capture(
-                startup_capture.capture_file,
-                startup_capture.capture_id,
-                startup_capture.attributes,
-                startup_capture.configuration,
-            )
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
-            ack_queue.put(ErrorAck(str(exc)))
-            return
-    device: AcquisitionDevice | None = None
     try:
         device = device_factory()
         if isinstance(device, CaptureEventSource):
             device.set_capture_event_sink(emit)
         device.connect()
         if not report_received:
-            emit(DeviceInfoEvent("after_start", device.device_info))
-        streams: tuple[SignalStreamSpec, ...] = tuple(device.streams)
-        if not streams or len({item.stream_id for item in streams}) != len(streams):
-            raise ValueError("device streams must be non-empty and uniquely identified")
-        logger.info(
-            "Device connected with streams: %s",
-            ", ".join(item.stream_id for item in streams),
-        )
-    except (DeviceError, OSError, RuntimeError, TypeError, ValueError) as exc:
-        logger.exception("Acquisition worker startup failed")
-        message = str(exc)
-        if device is not None:
-            try:
-                device.disconnect()
-            except (
-                DeviceError,
-                OSError,
-                RuntimeError,
-                TypeError,
-                ValueError,
-            ) as cleanup:
-                logger.exception("Device cleanup after failed startup also failed")
-                message += f"; device cleanup failed: {cleanup}"
-        if startup_capture is not None:
-            recorder.record_event(
-                DiagnosticEvent(
-                    "error",
-                    "acquisition",
-                    "startup",
-                    "startup_failure",
-                    message,
-                    {"exception_type": type(exc).__name__},
-                )
-            )
-            recorder.stop_capture("startup_failure")
-        ack_queue.put(ErrorAck(message))
-        return
-    rings: dict[str, SeqlockRingBuffer] = {}
-    shms: dict[str, SharedMemory] = {}
-    try:
+            emit(DeviceInfoEvent("after_connection", device.device_info))
+        streams = tuple(device.streams)
+        if len({spec.stream_id for spec in streams}) != len(streams):
+            raise ValueError("duplicate stream IDs in device registry")
+        specs = {spec.stream_id: spec for spec in streams}
         for index, spec in enumerate(streams):
             count = max(round(config.ring_buffer_seconds * spec.nominal_rate_hz), 16)
             shm = SharedMemory(
@@ -167,175 +102,259 @@ def background_main(
                     count, spec.n_channels, dtype=spec.numpy_dtype
                 ),
             )
-            ring = SeqlockRingBuffer(
+            shms[spec.stream_id] = shm
+            rings[spec.stream_id] = SeqlockRingBuffer(
                 count, spec.n_channels, shm, dtype=spec.numpy_dtype, is_owner=True
             )
-            shms[spec.stream_id] = shm
-            rings[spec.stream_id] = ring
-    except (OSError, ValueError) as exc:
-        logger.exception("Could not allocate shared memory")
-        if startup_capture is not None:
-            recorder.record_event(
+        health = WorkerHealthCollector(
+            tuple(
+                (f"{device_id}/{spec.stream_id}", spec.nominal_rate_hz, spec.n_channels)
+                for spec in streams
+            )
+        )
+
+        def on_packet(
+            packet: AcquisitionPacket, monotonic_ns: int, unix_ns: int
+        ) -> None:
+            stream_id = packet.stream_id
+            timestamps = tuple(
+                value.item() if isinstance(value, np.generic) else value
+                for value in packet.timestamps
+            )
+            data = {
+                name: tuple(
+                    value.item() if isinstance(value, np.generic) else value
+                    for value in values
+                )
+                for name, values in packet.data.items()
+            }
+            validity = {
+                name: tuple(
+                    value.item() if isinstance(value, np.generic) else value
+                    for value in values
+                )
+                for name, values in packet.validity.items()
+            }
+            if stream_id is not None:
+                if stream_id not in specs:
+                    raise ValueError(
+                        f"packet references undeclared stream {stream_id!r}"
+                    )
+                spec = specs[stream_id]
+                channels = tuple(channel.channel_id for channel in spec.channels)
+                if set(data) != set(channels) or set(validity) != set(channels):
+                    raise ValueError(
+                        "packet channels differ from the fixed stream layout"
+                    )
+                count = len(timestamps)
+                if any(
+                    len(data[c]) != count or len(validity[c]) != count for c in channels
+                ):
+                    raise ValueError(
+                        "timestamps, values, and validity must have equal lengths"
+                    )
+                if any(
+                    type(flag) is not bool for c in channels for flag in validity[c]
+                ):
+                    raise TypeError("validity values must be bool")
+                if any(
+                    isinstance(value, bool)
+                    or not isinstance(value, int | float)
+                    or not math.isfinite(value)
+                    for value in timestamps
+                ):
+                    raise ValueError("source timestamps must be finite numbers")
+                for timestamp in timestamps:
+                    validate_sample_value(
+                        timestamp, np.dtype(spec.timestamp_dtype), "timestamp"
+                    )
+                for channel in channels:
+                    for value in data[channel]:
+                        if value is not None:
+                            validate_sample_value(value, spec.numpy_dtype, channel)
+                # Only the live path narrows timestamps to float64 for display.
+                producer.send_packet(
+                    stream_id=stream_id,
+                    timestamps=timestamps,
+                    data=data,
+                    validity=validity,
+                    document=packet.capture_document(),
+                    reported_rate_hz=packet.reported_rate_hz,
+                    samples_lost=packet.samples_lost,
+                    status=packet.status,
+                    received_monotonic_ns=monotonic_ns,
+                    received_unix_ns=unix_ns,
+                )
+                matrix = np.zeros((count, spec.n_channels), dtype=spec.numpy_dtype)
+                display_validity = np.zeros((count, spec.n_channels), dtype=np.bool_)
+                for column, channel in enumerate(channels):
+                    for row, value in enumerate(data[channel]):
+                        if value is not None:
+                            matrix[row, column] = value
+                            display_validity[row, column] = validity[channel][row]
+                if count:
+                    rings[stream_id].write_samples(
+                        matrix,
+                        timestamps=np.asarray(timestamps, dtype=np.float64),
+                        validity=display_validity,
+                    )
+                unit_scale = {
+                    "seconds": 1.0,
+                    "milliseconds": 1e-3,
+                    "microseconds": 1e-6,
+                    "nanoseconds": 1e-9,
+                }.get(spec.timestamp_unit)
+                health.observe(
+                    f"{device_id}/{stream_id}",
+                    timestamps=[float(t) * (unit_scale or 1.0) for t in timestamps],
+                    validity=display_validity.tolist(),
+                    reported_rate_hz=packet.reported_rate_hz,
+                    samples_lost=packet.samples_lost,
+                    status=packet.status,
+                    misaligned=False,
+                    evaluate_source_timing=unit_scale is not None,
+                )
+            else:
+                producer.send_packet(
+                    stream_id=None,
+                    timestamps=(),
+                    data={},
+                    validity={},
+                    document=packet.capture_document(),
+                    reported_rate_hz=packet.reported_rate_hz,
+                    samples_lost=packet.samples_lost,
+                    status=packet.status,
+                    received_monotonic_ns=monotonic_ns,
+                    received_unix_ns=unix_ns,
+                )
+
+        infos = tuple(
+            StreamInfo(
+                f"{device_id}/{spec.stream_id}",
+                rings[spec.stream_id].shm_name,
+                rings[spec.stream_id].n_samples,
+                tuple(c.channel_id for c in spec.channels),
+                spec.nominal_rate_hz,
+                spec.numpy_dtype.str,
+                spec.label,
+                tuple(c.label for c in spec.channels),
+                tuple(c.unit for c in spec.channels),
+                device_id,
+                spec.stream_id,
+                spec.source_clock,
+                spec.timestamp_unit,
+            )
+            for spec in streams
+        )
+        with report_lock:
+            ack_queue.put(Ready(infos, latest_info, revision, streams))
+        while not start_event.wait(0.05):
+            if stop_event.is_set() or producer.failed:
+                return
+        if stop_event.is_set():
+            return
+        startup = False
+        acquisition = AcquisitionThread(device, on_packet, local_stop)
+        acquisition.start()
+        last_health = 0.0
+        while not stop_event.wait(0.02):
+            if producer.failed:
+                raise RuntimeError("recorder failed")
+            if not acquisition.is_alive():
+                if acquisition.failure is not None:
+                    raise acquisition.failure
+                raise RuntimeError("device polling exited without a shutdown request")
+            now = time.monotonic()
+            if now - last_health >= 0.25:
+                snapshot = health.snapshot(acquisition_alive=True)
+                with contextlib.suppress(queue.Full):
+                    health_queue.put_nowait(snapshot)
+                last_health = now
+    except BaseException as exc:
+        failure = exc
+        logger.exception("Device worker %s failed", device_id)
+        code = "startup_failure" if startup else "acquisition_failure"
+        try:
+            emit(
                 DiagnosticEvent(
                     "error",
-                    "acquisition",
-                    "shared_memory",
-                    "startup_failure",
+                    device_id,
+                    "startup" if startup else "acquisition",
+                    code,
                     str(exc),
-                    {},
+                    {"exception_type": type(exc).__name__},
                 )
             )
-            recorder.stop_capture("startup_failure")
-        ack_queue.put(ErrorAck(str(exc)))
-        device.disconnect()
-        for shm in shms.values():
-            try:
-                shm.close()
-                shm.unlink()
-            except OSError:
-                pass
-        return
-    specs = {item.stream_id: item for item in streams}
-    health = WorkerHealthCollector(
-        tuple(
-            (item.stream_id, item.nominal_rate_hz, item.n_channels) for item in streams
-        )
-    )
-
-    def on_packet(packet: AcquisitionPacket) -> None:
-        """Publish known signal samples and forward the full packet to recording."""
-        stream_id = packet.stream_id
-        if stream_id is not None and stream_id in rings:
-            spec = specs[stream_id]
-            rows: list[tuple[int, float]] = []
-            for index, value in enumerate(packet.timestamps):
-                try:
-                    timestamp = float(value)
-                except TypeError, ValueError:
-                    continue
-                if math.isfinite(timestamp):
-                    rows.append((index, timestamp))
-            matrix = np.zeros((len(rows), spec.n_channels), dtype=spec.numpy_dtype)
-            validity = np.zeros((len(rows), spec.n_channels), dtype=np.bool_)
-            misaligned = (
-                not packet.timestamps
-                or not packet.data
-                or len(rows) != len(packet.timestamps)
-            )
-            for channel_index, channel in enumerate(spec.channels):
-                values = packet.data.get(channel.channel_id)
-                if values is None or isinstance(values, str | bytes):
-                    misaligned = True
-                    continue
-                if len(values) != len(packet.timestamps):
-                    misaligned = True
-                for row_index, (source_index, _timestamp) in enumerate(rows):
-                    if source_index >= len(values):
-                        continue
-                    value = values[source_index]
-                    if value is None:
-                        continue
-                    try:
-                        numeric = float(value)
-                        if not math.isfinite(numeric):
-                            continue
-                        matrix[row_index, channel_index] = value
-                    except TypeError, ValueError, OverflowError:
-                        continue
-                    validity[row_index, channel_index] = True
-            timestamps = np.asarray([item[1] for item in rows], dtype=np.float64)
-            if rows:
-                rings[stream_id].write_samples(
-                    matrix, timestamps=timestamps, validity=validity
-                )
-            health.observe(
-                stream_id,
-                timestamps=timestamps.tolist(),
-                validity=validity.tolist(),
-                reported_rate_hz=packet.reported_rate_hz,
-                samples_lost=packet.samples_lost,
-                status=packet.status,
-                misaligned=misaligned,
-            )
-        recorder.on_packet(packet)
-
-    stop_event = threading.Event()
-    acquisition = AcquisitionThread(
-        device, on_packet, stop_event, already_connected=True
-    )
-    handler = CommandHandler(cmd_queue, ack_queue, recorder, event_sink=emit)
-    with report_lock:
-        ready_info, ready_revision = latest_info, report_revision
-    acquisition.start()
-    ack_queue.put(
-        Ready(
-            tuple(
-                StreamInfo(
-                    spec.stream_id,
-                    rings[spec.stream_id].shm_name,
-                    rings[spec.stream_id].n_samples,
-                    tuple(channel.channel_id for channel in spec.channels),
-                    spec.nominal_rate_hz,
-                    rings[spec.stream_id].dtype.str,
-                    spec.label,
-                    tuple(channel.label for channel in spec.channels),
-                    tuple(channel.unit for channel in spec.channels),
-                )
-                for spec in streams
-            ),
-            ready_info,
-            ready_revision,
-        )
-    )
-    try:
-        last_health = 0.0
-        fatal_sent = False
-        while not handler.tick():
-            now = time.monotonic()
-            if health_queue is not None and now - last_health >= 0.25:
-                snapshot = health.snapshot(acquisition_alive=acquisition.is_alive())
-                try:
-                    health_queue.put_nowait(snapshot)
-                except queue.Full:
-                    with contextlib.suppress(queue.Empty):
-                        health_queue.get_nowait()
-                    with contextlib.suppress(queue.Full):
-                        health_queue.put_nowait(snapshot)
-                last_health = now
-            if (
-                not acquisition.is_alive()
-                and acquisition.failure is not None
-                and not fatal_sent
-            ):
-                if recorder.active:
-                    recorder.record_event(
-                        DiagnosticEvent(
-                            "error",
-                            "acquisition",
-                            "during_capture",
-                            "acquisition_failure",
-                            str(acquisition.failure),
-                            {"exception_type": type(acquisition.failure).__name__},
-                        )
-                    )
-                if fatal_queue is not None:
-                    logger.error("Acquisition thread failed: %s", acquisition.failure)
-                    fatal_queue.put(
-                        WorkerFatal("acquisition_failure", str(acquisition.failure))
-                    )
-                fatal_sent = True
+        except BaseException as diagnostic_error:
+            logger.error("Could not record worker failure: %s", diagnostic_error)
+        fatal_queue.put(WorkerFatal(code, f"{device_id}: {exc}"))
+        if startup:
+            ack_queue.put(ErrorAck(str(exc)))
     finally:
-        logger.info("Acquisition worker shutting down")
-        stop_event.set()
-        device.disconnect()
-        acquisition.join(timeout=5)
-        recorder.close()
-        for stream_id, ring in rings.items():
-            ring.close()
-            shm = shms[stream_id]
+        local_stop.set()
+        cleanup_errors: list[BaseException] = []
+        if device is not None:
             try:
-                shm.close()
-                shm.unlink()
-            except OSError:
-                pass
-        logger.info("Acquisition worker stopped")
+                device.request_stop()
+            except BaseException as exc:
+                failure = failure or exc
+                cleanup_errors.append(exc)
+                fatal_queue.put(WorkerFatal("shutdown_failure", f"{device_id}: {exc}"))
+            if acquisition is not None:
+                acquisition.join(config.shutdown_timeout_s)
+                if acquisition.is_alive():
+                    timeout = TimeoutError("device read did not stop")
+                    failure = failure or timeout
+                    cleanup_errors.append(timeout)
+                elif acquisition.failure is not None:
+                    failure = failure or acquisition.failure
+            try:
+                device.disconnect()
+            except BaseException as exc:
+                failure = failure or exc
+                cleanup_errors.append(exc)
+                fatal_queue.put(WorkerFatal("shutdown_failure", f"{device_id}: {exc}"))
+        for ring in rings.values():
+            try:
+                ring.close()
+            except BaseException as exc:
+                failure = failure or exc
+                cleanup_errors.append(exc)
+        for shm in shms.values():
+            for release in (shm.close, shm.unlink):
+                try:
+                    release()
+                except BaseException as exc:
+                    failure = failure or exc
+                    cleanup_errors.append(exc)
+        if cleanup_errors:
+            message = "; ".join(str(exc) for exc in cleanup_errors)
+            fatal_queue.put(WorkerFatal("shutdown_failure", f"{device_id}: {message}"))
+            try:
+                emit(
+                    DiagnosticEvent(
+                        "error",
+                        device_id,
+                        "shutdown",
+                        "shutdown_failure",
+                        message,
+                        {"errors": [type(exc).__name__ for exc in cleanup_errors]},
+                    )
+                )
+            except BaseException as exc:
+                failure = failure or exc
+                logger.error("Could not record shutdown diagnostic: %s", exc)
+        completed = False
+        try:
+            if acquisition is not None and acquisition.is_alive():
+                raise TimeoutError("cannot complete producer while polling is alive")
+            producer.complete()
+            completed = True
+        except BaseException as exc:
+            failure = failure or exc
+            fatal_queue.put(WorkerFatal("producer_failure", f"{device_id}: {exc}"))
+        ack_queue.put(
+            WorkerStopped(
+                str(failure) if failure else None, latest_info, revision, completed
+            )
+        )

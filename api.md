@@ -1,474 +1,143 @@
 # Python API reference
 
-The package root is intentionally minimal. Public APIs are grouped into
-`sifi_streamer.capture`, `sifi_streamer.acquisition`, `sifi_streamer.sifi`, and
-`sifi_streamer.web`. This keeps device-neutral capture and acquisition usable
-without importing the bundled SiFi or dashboard integrations.
-
-## Capture vocabulary and annotations
-
-`Scalar` is `str | int | float | bool | None`. `Attributes` is a mapping from
-non-empty string keys to scalar values. Floats must be finite. Lists, nested
-mappings, serialized state blobs, and non-string keys are rejected.
-
-`validate_attributes(value)` validates this contract and returns a defensive
-`dict` copy. `CaptureDecodeError` identifies malformed schema values;
-`CaptureLifecycleError` identifies invalid record ordering or state.
-
-IDs identify occurrences. Kinds identify stable categories. A segment is a
-duration with one start and one stop record. A marker is a point fact. Segment
-boundaries are authoritative and do not automatically create duplicate markers.
-
-## Capture records
-
-Every record contains these inherited fields:
-
-| Field | Meaning |
-| --- | --- |
-| `schema_version` | Wire schema version; readers currently accept version 2 |
-| `sequence` | Zero-based, contiguous record position |
-| `host_monotonic_ns` | Host monotonic timestamp at record creation |
-| `host_unix_ns` | Host Unix timestamp at record creation |
-| `record_type` | Stable record discriminator |
-
-The `CaptureRecord` union contains:
-
-| Type | Additional fields |
-| --- | --- |
-| `CaptureStarted` | `capture_id`, `attributes` |
-| `RawPacket` | complete finite-JSON `packet` object |
-| `SegmentStarted` | `segment_id`, `segment_kind`, `attributes` |
-| `SegmentStopped` | `segment_id`, optional `reason` |
-| `Marker` | `marker_id`, `marker_kind`, `attributes`, optional `source_time_ns` and `source_clock` |
-| `CaptureStopped` | `reason` |
-
-`record_to_wire_map(record)` produces the schema-v2 mapping. `encode_record`
-validates it and returns newline-terminated UTF-8 JSON bytes. `decode_record`
-accepts a parsed JSON object and returns a typed record. Known record types
-ignore unknown fields for forward compatibility; unknown record types and schema
-versions are rejected.
-
-### `CaptureLogWriter`
-
-`CaptureLogWriter(path, capture_id, attributes=None, ...)` exclusively creates a
-new capture and immediately appends `CaptureStarted`. It never opens an existing
-file for append or replacement. Packet batches become concatenated Zstandard
-frames; capture and segment boundaries flush immediately.
-
-Public operations are:
-
-- `append_packet(packet) -> int`: append the complete finite-JSON packet and
-  return its sequence number.
-- `start_segment(segment_id, segment_kind, attributes=None) -> int`: start a
-  uniquely identified open segment.
-- `stop_segment(segment_id, reason=None) -> int`: stop an open segment.
-- `append_marker(marker_id, marker_kind, attributes=None, *, source_time_ns=None,
-  source_clock=None) -> int`: add a marker in stable ID/kind order.
-- `flush(*, boundary=False)`: write buffered records as a compressed frame.
-- `close(reason="normal_completion")`: require all segments to be closed, append
-  `CaptureStopped`, flush, and close. A repeated successful close is harmless.
-
-The writer is a context manager, but its normal context exit does not infer an
-abnormal reason. Lifecycle owners that need reason mapping should use a runner.
-
-### `CaptureLogReader`
-
-Iterating `CaptureLogReader(path)` streams a capture without mutation. It checks
-Zstandard decoding, newline termination, finite JSON, schema version, contiguous
-sequences, exactly one initial capture start, no records after capture stop, and
-valid segment pairing. A capture that ended in a crash may omit `CaptureStopped`
-and remains readable up to its last complete valid record.
-
-Third-party integrations can import `CaptureLogReader`, `RawPacket`,
-`LaunchConfiguration`, `DeviceInfo`, and `Diagnostic` from
-`sifi_streamer.capture` without installing the Parquet extra. The reader does
-not interpret vendor layouts: `packet`, `configuration`, `info`, and `details`
-retain complete finite JSON objects, including nested and unknown vendor fields.
-Dispatch on the public record types and pass their payloads to your own parser:
-
-```python
-from pathlib import Path
-from sifi_streamer.capture import CaptureLogReader, DeviceInfo, RawPacket
-
-for record in CaptureLogReader(Path("session.capture.jsonl.zst")):
-    match record:
-        case RawPacket(packet=packet):
-            parse_vendor_packet(packet)  # consumer-owned parser
-        case DeviceInfo(stage=stage, info=info):
-            parse_vendor_report(stage, info)  # consumer-owned parser
-```
-
-Every record exposes `sequence`, `host_monotonic_ns`, and `host_unix_ns`.
-Unknown envelope fields on known record types are accepted but are not exposed
-by the typed record model; unknown record types and unsupported schema versions
-are rejected. Vendor payload fields are preserved by decode/encode round trips.
-
-## Controllers and ownership
-
-`CaptureBackend` is a runtime-checkable structural protocol with `start`, `stop`,
-`start_segment`, `stop_segment`, and `marker`. Implementations use composition;
-they do not inherit application behavior from the controller.
-
-`CaptureController(backend)` owns generic lifecycle validation:
-
-- `start()` starts once. Failed startup is cleaned up and raised as
-  `CaptureInitializationError` with the original cause.
-- `marker(marker_id, kind, attributes=None, **extra)` rejects calls before start,
-  merges scalar metadata, and rejects duplicate keys.
-- `start_segment(segment_id, kind, attributes=None, **extra) -> str` rejects a
-  duplicate active ID and returns the ID.
-- `stop_segment(segment_id, reason="completed")` requires reverse start order.
-- `close(reason="normal_completion")` automatically closes remaining segments in
-  reverse order, using `completed` for normal completion and `aborted` otherwise,
-  then stops the backend exactly once.
-
-The controller is also a context manager. A clean exit uses
-`normal_completion`; an exceptional exit uses `aborted`.
-
-Only the launcher or component that starts a capture closes it. Code receiving
-an already-started controller may annotate it but does not close it.
-
-`NoCaptureController` has the same annotation surface for deliberate no-hardware
-paths. It validates scalar metadata but performs no I/O and does not track
-segments.
-
-## Creating a SiFi capture
-
-`create_sifi_capture(capture_file, capture_id, attributes=None, *,
-bridge_executable=..., host="127.0.0.1", port=5000, transport="stdout",
-sensor_profile=None, synthetic=False, config=None)` from `sifi_streamer.sifi`
-returns an unstarted generic controller composed with an
-`AcquisitionCaptureBackend`. No process, device, or file is created until
-`start()`.
-
-Hardware capture requires a preinstalled bridge. `sensor_profile` accepts a
-complete immutable `SiFiSensorProfile`; omission selects `ALL_SENSORS_PROFILE`.
-`EMG_ONLY_PROFILE` and `EMG_IMU_PROFILE` provide reduced enabled sets. Every
-sensor option is concrete and is sent on every connection, including settings
-for disabled sensors. The final sensor-state command is followed by `info`
-validation before acquisition starts.
-
-Preset names refer to ECG, EMG, EDA, IMU, and PPG. Temperature configuration
-contains a concrete rate but no enabled field because the bridge does not
-expose a temperature enable switch.
-
-PPG configuration contains raw `samples_per_second` and `averaging`; its
-effective output rate is their quotient. JSON profiles can be round-tripped
-with `load_sensor_profile()` and `write_sensor_profile()`. With
-`synthetic=True`, the same background, shared-memory, and recording path runs
-without the bridge, and hardware profiles are rejected.
-
-`AcquisitionCaptureBackend` is the sole acquisition-to-capture adapter. It owns
-exactly one entered `BackgroundHandle` and its capture, including cleanup of a
-partially entered handle. SiFi composition injects a `SiFiBridgeDevice` factory;
-it does not define a backend subclass or alias.
-
-## Live acquisition
-
-### Generic injected devices
-
-`AcquisitionDevice` is the generic structural boundary. After `connect()`, its
-ordered `streams` tuple is fixed for the capture. Each `SignalStreamSpec` has a
-string ID, `SignalChannelSpec` entries, a positive nominal rate, a native NumPy
-dtype, and optional display labels and units.
-
-`AcquisitionPacket` contributes timestamps and channel data to zero or one
-declared stream. `capture_document()` independently returns the complete raw
-packet to record, or `None` for an adapter-only contribution. This permits an
-adapter to split a multi-stream message without duplicating its raw record.
-
-`create_capture_runtime(path, capture_id, device_factory, ...)` composes an
-injected device with a controller and `AcquisitionMonitor`.
-`create_sifi_capture_runtime(...)` is the SiFi convenience equivalent.
-
-### Modalities and packets
-
-`Modality` identifies EMG, IMU, ECG, EDA, PPG, and temperature packet streams.
-`SIGNAL_MODALITIES` contains all enum members. `DEFAULT_MODALITIES` supplies the
-default channel layouts and rates.
-
-`ModalitySpec(channels, sample_rate, dtype=numpy.float32)` describes one signal
-matrix. Its `n_channels` and `numpy_dtype` properties normalize the layout.
-
-`Modalities[T]` is an immutable fixed-shape collection with optional `emg`, `imu`,
-`ecg`, `eda`, `ppg`, and `temperature` values. Use:
-
-- `get(modality)` to return a value or `None`;
-- `require(modality)` to return a value or raise `LookupError`;
-- `with_value(modality, value)` to create a modified copy;
-- `enabled()` to iterate enabled pairs in modality order;
-- `from_enabled(values)` to construct a collection from pairs.
-
-`modalities_from_device_info(info)` converts a vendor bridge info document into
-enabled `ModalitySpec` values. `packet_from_json_line(line)` parses a bridge JSON
-line, returning `None` for malformed/non-object JSON.
-
-`SiFiPacket` exposes typed packet fields and retains the original document.
-`modality` maps a known `packet_type` to `Modality`; non-signal packets return
-`None`. `capture_document()` returns the original complete JSON object when one
-was parsed, preserving unknown device fields.
-
-### Canonical SiFi tables and Parquet
-
-Install the `parquet` extra before importing `sifi_streamer.sifi.export`.
-`read_sifi_capture_tables(path)` returns a frozen `SiFiCaptureTables` value with
-eight views of one capture (table schema version 2):
-
-- `capture`: one row containing capture identity, lifecycle clocks/reason, and
-  `attribute_*` columns;
-- `streams`: one row per declared or observed modality channel, including its
-  order, dtype, nominal rate, and whether that rate came from device info, a
-  packet, or defaults;
-- `markers`: point facts with capture sequence, host clocks, optional source
-  clock, and attributes;
-- `segments`: paired generic intervals with start/stop sequences and clocks,
-  stop reason, and start attributes; an open interval has null stop fields;
-- `signals`: a mapping from `Modality` to sample-level DataFrames with packet
-  sequence, sample index, distinct device/bridge/host clocks, health fields,
-  and canonical channel columns.
-- `launch_configuration`: the optional resolved settings record;
-- `device_info`: every explicit device report, including empty and repeated
-  reports and the pre-configuration stage;
-- `diagnostics`: every diagnostic with severity, source, stage, code, and message.
-
-The three metadata tables include capture ID/file, record sequence, and host
-clocks. Nested documents are retained in `configuration_json`, `info_json`, and
-`details_json` string columns; use `json.loads` to recover their full JSON values.
-Empty tables retain their columns and nullable dtypes. Captures without SiFi
-signals or metadata, including startup failures, have empty `streams` and
-`signals` views and still export their lifecycle and metadata. Unknown vendor
-packets are not included in signal tables; use the generic reader for them.
-
-A packet belongs to a segment exactly when its sequence is greater than the
-segment's start sequence and less than its stop sequence. This ordering rule is
-authoritative; host timestamps remain packet-level, and the exporter does not
-invent per-sample host timestamps or translate between clock domains.
-
-Attributes are normalized to lowercase `attribute_*` columns. Integer and
-floating values may share a numeric column; incompatible scalar types and
-distinct keys that normalize to the same column are rejected. Known SiFi
-packets are also rejected when timestamps or canonical channel arrays are
-malformed, rather than silently dropping samples.
-
-`export_sifi_capture_to_parquet(path, output=None, force=False)` writes
-`capture.parquet`, `streams.parquet`, `markers.parquet`, `segments.parquet`, and
-`signals/<modality>.parquet`, plus `launch_configuration.parquet`,
-`device_info.parquet`, and `diagnostics.parquet` through a temporary directory. Existing output is
-refused unless `force=True`. The `sifi-capture-to-parquet` command exposes the
-same operation. These tables are derived and do not interpret marker/segment
-kinds, supersession, trials, presentations, or downstream labeling policy.
-
-SiFi device classes satisfy the generic `AcquisitionDevice` protocol through
-their `streams` property. `PacketReader` is a narrower structural protocol used
-only by bridge transports.
-
-`SiFiBandDevice(host="127.0.0.1", port=5000)` reads newline-delimited packets from
-an already-running TCP endpoint and assumes default modality layouts.
-`SyntheticSiFiDevice(emg_sample_rate=1600, amplitude=100.0)` generates
-deterministic eight-channel sinusoidal EMG for development and tests.
-
-### `SiFiBridgeDevice`
-
-`SiFiBridgeDevice` manages one vendor process. `connect()` checks that the
-explicit executable exists, launches it outside the foreground signal group,
-configures the EMG rate, reads device info, and starts the chosen transport.
-`modalities` is available after connection; `device_info` exposes the complete
-info document. `read_packet()` delegates to the selected packet transport.
-`disconnect()` sends an orderly stop/exit request, escalates if the process does
-not exit, and closes stdin, stdout, and stderr.
-
-### `BackgroundHandle`
-
-`BackgroundHandle(config, device_factory)` is the foreground context manager for
-one spawned acquisition worker. Entering waits for readiness and attaches
-`SharedMemoryReader` objects. `streams` exposes the fixed worker-published
-registry, `stream_readers` maps stream IDs to readers, and `device_info` returns
-optional startup metadata.
-
-The annotation methods `start_capture`, `stop_capture`, `start_segment`,
-`stop_segment`, and `add_marker` send typed commands and wait for matching worker
-acknowledgements. Attribute mappings are copied before crossing the process
-boundary. Capture stop waits without the normal acknowledgement timeout so the
-worker can flush safely.
-
-`SharedMemoryReader.read_window(n_samples, *, raise_on_stale=False)` returns the
-newest coherent `(time, channels)` NumPy copy in chronological order. It returns
-`None` if no fresh coherent snapshot is available, or raises `StaleDataError`
-for unchanged data when requested. `n_samples`, `n_channels`, `dtype`, and
-`has_new_data` describe the attached ring. `close()` releases only the local
-attachment; the worker owns unlinking.
-
-`read_signal_window(n_samples)` and `read_since(cursor, *, max_samples=None)`
-return `SignalWindow(start_index, end_index, timestamps, samples, validity,
-overrun)`. Validity is independent of payload dtype, so integer and floating
-streams represent missing values identically.
-
-### Health and web capture
-
-`HealthThresholds` controls rolling rate, staleness, missingness, and loss
-warnings. `AcquisitionMonitor.latest()` returns immutable evaluated snapshots;
-`events` retains warning/recovery transitions, `fatal()` reports reliable
-worker failure, and `read_since()` supplies live signal batches.
-
-`sifi_streamer.web.AnnotationKindDefinition` provides separate marker or
-segment shortcuts with display metadata, ID prefix/separator/padding/start, and
-default scalar attributes. Its `label` and `color` are dashboard presentation;
-the definition is not an authoritative capture record.
-`AnnotationKindRegistry` generates collision-free IDs in Python.
-
-`serve_capture_web(output, runtime_factory, ...)` owns one controller behind a
-loopback-only dashboard. Downstream launchers retain dependency injection by
-supplying the runtime factory and a read-only scalar configuration summary.
-
-#### Reusable annotation kinds
-
-Pass a sequence of `AnnotationKindDefinition` objects through `definitions=`
-to `serve_capture_web` or `WebCaptureCoordinator`. The Python API accepts
-definitions directly; `--kinds-file` is a web CLI option. The
-[README kinds-file example](README.md#reusable-annotation-kinds) lists the
-equivalent JSON fields, defaults, and constraints.
-
-```python
-from pathlib import Path
-
-from sifi_streamer.sifi.composition import create_sifi_capture_runtime
-from sifi_streamer.web import (
-    AnnotationKindDefinition,
-    AnnotationTarget,
-    serve_capture_web,
-)
-
-
-def main() -> None:
-    output = Path("demo.capture.jsonl.zst")
-    definitions = (
-        AnnotationKindDefinition(
-            target=AnnotationTarget.MARKER,
-            kind="Note",
-            label="Operator note",
-            color="#38BDF8",
-            default_attributes={"source": "operator"},
-        ),
-        AnnotationKindDefinition(
-            target=AnnotationTarget.SEGMENT,
-            kind="Rest",
-            label="Rest interval",
-            color="#34D399",
-            id_prefix="rest",
-            separator="-",
-            padding=3,
-            start=1,
-            default_attributes={"condition": "rest", "seated": True},
-        ),
-    )
-    serve_capture_web(
-        output,
-        lambda capture_id, attributes, launch_configuration: (
-            create_sifi_capture_runtime(
-                output,
-                capture_id,
-                attributes,
-                synthetic=True,
-                launch_configuration=launch_configuration,
-            )
-        ),
-        definitions=definitions,
-    )
-
-
-if __name__ == "__main__":
-    main()
-```
-
-The main guard is required for spawned acquisition on Windows. Use a new output
-path for each launch. This example generates `Note_01` and `rest-001` as the
-first IDs. Per-annotation attributes override matching `default_attributes`.
-These shortcuts belong to the web layer; direct `CaptureController.add_marker`
-and `start_segment` calls still take explicit IDs, kinds, and attributes.
-
-## Runners and interactive input
-
-`run_capture(controller, action)` owns startup and exactly one controlled close.
-It maps Ctrl+C to `operator_interrupt`, propagates other exceptions after closing
-with `aborted`, and otherwise returns `normal_completion`.
-
-`run_timed_capture`, `run_until_interrupt`, and `run_interactive_capture` build on
-that ownership boundary. `interactive_annotations` accepts only:
-
-```text
-segment start ID KIND [key=value ...]
-segment stop ID [reason]
-marker ID KIND [key=value ...]
-help
-stop
-```
-
-`parse_scalar` recognizes booleans, nulls, integers, and floats without expression
-evaluation. `parse_attributes` parses unique `key=value` tokens.
-
-## Configuration
-
-`StreamerConfig` is a frozen settings object. It controls ring history,
-acknowledgement timeout, capture enablement, compression frame size and interval,
-compression level, and optional boundary fsync. Invalid non-positive values and
-unsupported compression levels fail during construction.
-
-## Explicit bridge installation
-
-Live acquisition targets bridge 2.0.1. Sensor-profile JSON uses version 2:
-`ImuConfiguration.accelerometer_range_g` accepts 8 or 16 (default 16), and
-`gyroscope_range_dps` has been removed. Old profile files require an explicit
-migration; historical captures retain raw decoding and SiFi table export.
-`ModalitySpec.sample_rate` retains fractional Hz rather than rounding.
-
-Packet timestamps are preserved as supplied. Current bridge signal timestamps
-are acquisition-relative seconds, `received_at` is host Unix time, and the
-top-level Start Time `start_time` is Unix time. Start Time and Status metadata
-are retained in `SiFiPacket.document` and authoritative raw records. Null sample
-gaps and omitted packet rates remain supported. Export's measured rate column
-may vary between packets; it is not required to equal configured nominal Hz.
-
-Bridge acquisition never occurs during package installation, import, capture
-creation, or device startup. Invoke `sifi-download-bridge` or call
-`install_bridge(output_directory, *, latest=False, tag=None, force=False)`.
-
-The default uses maintainer-pinned `TESTED_VERSION` and platform SHA-256 values.
-`tagged_asset` resolves a specific release; unpinned tag and latest resolution
-require a valid digest in GitHub metadata and fail closed otherwise. Downloads
-and extracted executables are size-constrained, only the expected nested
-executable is read, and overwrite is refused unless `force=True`.
-
-`BridgeAsset` describes the selected version, archive, URL, digest, and source.
-`BridgeInstallManifest` records durable installation provenance.
-`BridgeDownloadError` reports resolution, network, verification, extraction, and
-installation failures.
-
-## Exceptions
-
-| Exception | Meaning |
-| --- | --- |
-| `StreamerError` | Base for streamer operational failures |
-| `DeviceError` | Device, bridge, socket, or packet transport failure |
-| `AckTimeoutError` | Worker acknowledgement did not arrive in time |
-| `AckError` | Worker startup or command was explicitly rejected |
-| `RecordingError` | Recording command failed or received an unexpected ACK |
-| `StaleDataError` | No new shared-memory data was available when required |
-| `CaptureInitializationError` | Controller backend startup failed |
-| `CaptureError` | Base for capture schema/lifecycle value errors |
-| `CaptureDecodeError` | Capture record or stream could not be safely decoded |
-| `CaptureLifecycleError` | Capture or segment ordering was invalid |
-
-## Worker protocol messages
-
-Advanced integrations may use frozen messages from
-`sifi_streamer.acquisition.ipc`:
-`StartCapture`, `StopCapture`, `StartSegment`, `StopSegment`, `AddMarker`, and
-`Shutdown`, represented by `CommandMessage`. Acknowledgements are `Ready`,
-`CaptureStarted`, `CaptureStopped`, `SegmentStarted`, `SegmentStopped`,
-`MarkerAdded`, and `ErrorAck`, represented by `AckMessage`. `StreamInfo`
-describes one shared-memory stream and converts seconds to sample counts with
-`samples_for_seconds`.
-
-These messages are an implementation-level multiprocessing contract. Most
-applications should use `BackgroundHandle` or `CaptureController` instead of
-placing messages on queues directly.
+The package targets Python 3.14+. DuckDB is a runtime dependency. The capture
+format is a versioned DuckDB database with no compressed-JSONL compatibility.
+
+## Composition and lifecycle
+
+`CaptureController` composes a structural `CaptureBackend`; application functions
+receive a started controller and annotate it. The launcher that starts a capture
+is responsible for closing it. `NoCaptureController` supports deliberate
+no-hardware paths. Marker argument order is `marker_id, marker_kind`.
+
+`create_capture_runtime(path, capture_id, device_factory_or_mapping, attributes,
+config=..., thresholds=..., launch_configuration=...)` returns a controller and
+read-only monitor. Pass a picklable zero-argument factory or a mapping of explicit
+device IDs to factories. IDs are scoped to the capture; device IDs may not contain
+`/`. Each local stream is addressed live by its device-scoped key.
+
+Controllers expose `start()`, `marker(id, kind, attributes=None, **extra)`,
+`start_segment(id, kind, attributes=None, **extra)`, `stop_segment(id, reason)`,
+`record_event(event)`, and `close(reason)`. Reject annotations before startup or
+after close. Segments nest and close in reverse order. Automatic closure uses
+`completed` for normal completion and `aborted` otherwise. `close()` first
+quiesces device producers, then closes remaining segments and finalizes storage.
+Backend stop is attempted exactly once. Any unhandled acquisition, transport, or
+persistence error fails the whole capture.
+
+## Device and packet protocols
+
+Implement by structural shape, without inheritance or registration:
+
+- `connect()` initializes the device and its fixed stream registry.
+- `streams` returns an ordered tuple of `SignalStreamSpec`.
+- `device_info` returns a complete finite JSON object, including `{}`.
+- `read_packet()` returns an `AcquisitionPacket`.
+- `request_stop()` thread-safely unblocks an outstanding read.
+- `disconnect()` finishes cleanup after polling has stopped.
+
+`SignalChannelSpec(channel_id, label=None, unit=None)` describes one column.
+`SignalStreamSpec(stream_id, channels, nominal_rate_hz, dtype, label=None,
+source_clock='producer-defined', timestamp_unit='seconds', timestamp_dtype=...)`
+fixes layout and describes producer timing. Supported sample dtypes are boolean,
+integer, and floating numeric scalars up to 64 bits. Timestamps use signed integer
+or floating dtypes. The source-clock description is opaque text; no clock mapping
+is inferred. See [examples/myo_adapter.py](examples/myo_adapter.py).
+
+Packets supply `stream_id` (or None), `timestamps`, channel `data`, channel
+`validity`, `reported_rate_hz`, `samples_lost`, `status`, and
+`capture_document()` returning finite JSON or None. Each packet contributes to at
+most one declared stream. Arrays have equal lengths and exactly the declared
+channels. Explicit booleans express per-channel validity independently of nulls.
+A valid null is distinct from an invalid null. A packet with samples and no raw
+document is still recorded. No dynamic stream discovery or implicit repair occurs.
+
+`DeviceInfoEvent(stage, info)` and `DiagnosticEvent(severity, source, stage, code,
+message, details)` preserve explicit reports and diagnostics. Optional structural
+`CaptureEventSource.set_capture_event_sink(sink)` receives the sink before
+connection. Diagnostic severity describes data; integrations must propagate
+unhandled operational failures rather than merely logging them.
+
+## Storage and SQL
+
+`CaptureLogReader(path)` opens only current-schema DuckDB databases. Iteration
+returns validated typed record values. `RawPacket.packet` may be None for a
+sample-only packet. Raw packet documents and device reports retain complete
+finite JSON. Attributes are scalar strings, integers, finite floats, booleans,
+or null; nested attributes and non-string keys are rejected.
+
+Reader methods:
+
+- `query(sql, parameters=())`: one SELECT query, returning row tuples.
+- `tables()`: discover table and public view names.
+- `streams()`: discover stream declarations and physical sample table names.
+- `export(destination, format='parquet', native_variant=False, tables=None)`:
+  export selected tables/views into a new directory, returning table/path pairs.
+
+Core tables: `capture`, `producers`, `devices`, `streams`, `channels`, `events`,
+`packets`, `markers`, `segment_starts`, `segment_stops`, `device_reports`,
+`diagnostics`, `launch_configuration`, and capture lifecycle tables. Public views
+`segments` and `capture_status` derive intervals and terminal state.
+
+`events` stores `event_sequence`, `producer_id`, `producer_sequence`, `record_type`,
+`received_monotonic_ns`, and `received_unix_ns`. Receipt clocks are assigned before
+queueing; global sequence describes recorder acceptance, not physical measurement
+order. Host clocks share a scope on one machine/run, not across machines/reboots.
+
+`streams.table_name` locates the sample table. `channels` maps original channel IDs
+to physical value and validity column names and preserves their order. Sample
+rows contain `event_sequence`, `sample_index`, `source_time`, and channel columns.
+One packet event can contribute many rows. Join to `events` for packet receipt
+time. Source timestamps preserve their declared representation; live rings may
+use floating timestamps for display only.
+
+`packets` also retains `reported_rate_hz`, `samples_lost`, and `status` as typed
+columns, including when no raw document is supplied. These fields are producer
+reports; status strings do not replace explicit exception/failure propagation.
+
+Events and related rows are committed atomically. Ordinary reads never silently
+repair a database. Preserve the database plus WAL after a crash and call
+`recover_capture(source, destination)` for an explicitly recovered new copy. A
+missing committed capture stop means incomplete, not inferred success.
+
+`CaptureLogWriter` is the low-level single-owner writer. The normal application
+path uses the recorder process, not direct concurrent writer access. Device/stream
+registration precedes sample submissions. `flush()` commits pending data;
+`close(reason)` finishes open segments and terminal state. `abort()` discards the
+open transaction. Existing paths are refused.
+
+## Recorder policies and monitoring
+
+`StreamerConfig` defines live history and finite recorder limits. Defaults include
+one-second commits, an 8 MiB transaction target, 32 MiB producer budget, 8 MiB
+maximum submission, and two-second enqueue deadline. Byte budgets include feeder
+backlog. Timed commits work when acquisition is idle. ACKs promise acceptance,
+not durability; stalled storage can violate the normal commit target and must
+become an explicit failure. There are no silent drops or automatic retries.
+
+The runtime monitor exposes stream declarations, gap-aware ring reads, cumulative
+health, explicit device reports, recorder progress, and reliable terminal failure.
+The backend supervises failures independently of consumers polling health. Live
+rings are recent display buffers; recording/export never reconstruct samples from
+those rings. Unknown source timestamp units disable source-rate estimation.
+
+## SiFi and launchers
+
+`create_sifi_capture` and `create_sifi_capture_runtime` accept an optional
+`device_handles: Mapping[str, str]` mapping stable device IDs to explicit BLE
+handles. It is mutually exclusive with `device_handle` and synthetic acquisition.
+Each device has an independent worker and bridge. Sensor settings are shared;
+TCP/UDP ports increment from the supplied base port in mapping order. The CLIs
+expose this as repeatable `--device ID=HANDLE` options.
+
+`create_sifi_capture` and `create_sifi_capture_runtime` compose the same generic
+path with `SiFiBridgeDevice` or `SyntheticSiFiDevice`. Pass a bridge executable,
+transport, optional device handle, and complete sensor profile. The managed bridge
+is never downloaded implicitly. `sifi-download-bridge` is the explicit verified
+download operation; TCP, UDP, and stdout transports remain supported.
+
+`sifi-capture` provides timed, interrupt-driven, and interactive annotation modes.
+`sifi-capture-web` adds the local dashboard; closing a browser tab does not stop
+recording. Built assets ship in the wheel. `sifi-capture-export SOURCE OUTPUT`
+exports generic tables with `--format parquet|csv`, repeatable `--table`, and
+optional `--native-variant`. All exports are derived and refuse existing outputs.

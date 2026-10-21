@@ -8,7 +8,6 @@ from sifi_streamer.acquisition.config import StreamerConfig
 from sifi_streamer.acquisition.devices import (
     AcquisitionDevice,
     AcquisitionPacket,
-    CaptureContextPacket,
     DeviceFactory,
     SignalChannelSpec,
     SignalStreamSpec,
@@ -32,7 +31,6 @@ __all__ = [
     "AcquisitionMonitor",
     "AcquisitionPacket",
     "BackgroundHandle",
-    "CaptureContextPacket",
     "CaptureEventSource",
     "CaptureRuntime",
     "DeviceFactory",

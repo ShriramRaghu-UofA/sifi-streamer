@@ -429,6 +429,11 @@ class SiFiBridgeDevice:
             raise DeviceError("SiFiBridgeDevice.read_packet() called before connect()")
         return self._reader.read_packet()
 
+    def request_stop(self) -> None:
+        """Wake the packet reader before joining acquisition and closing the bridge."""
+        if self._reader is not None:
+            self._reader.disconnect()
+
     def _make_reader(self) -> PacketReader:
         match self._transport:
             case BridgeTransport.TCP:

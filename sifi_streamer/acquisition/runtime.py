@@ -13,6 +13,7 @@ from sifi_streamer.acquisition.health import (
 from sifi_streamer.acquisition.ipc import StreamInfo
 from sifi_streamer.acquisition.reader import SignalWindow
 from sifi_streamer.capture.controller import CaptureController
+from sifi_streamer.capture.recorder import RecorderStatus
 from sifi_streamer.capture.records import validate_document
 
 
@@ -38,6 +39,16 @@ class AcquisitionMonitor:
     def launch_configuration(self) -> dict[str, object]:
         """The complete settings passed to the authoritative recorder."""
         return self._handle.launch_configuration
+
+    @property
+    def device_infos(self) -> dict[str, dict[str, object]]:
+        """Latest device reports keyed by composition-owned device identity."""
+        return self._handle.device_infos
+
+    @property
+    def recorder_stats(self) -> RecorderStatus | None:
+        """Latest bounded-buffer and durable commit progress."""
+        return self._handle.recorder_stats
 
     @property
     def thresholds(self) -> HealthThresholds:

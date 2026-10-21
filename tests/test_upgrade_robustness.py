@@ -1,16 +1,7 @@
 import socket
-import tempfile
 import threading
 import unittest
-from multiprocessing import get_context
-from pathlib import Path
-from unittest.mock import patch
 
-from sifi_streamer.acquisition.config import StreamerConfig
-from sifi_streamer.acquisition.ipc import ErrorAck
-from sifi_streamer.acquisition.worker.process import background_main
-from sifi_streamer.acquisition.worker.recorder import RecorderFSM
-from sifi_streamer.capture import CaptureLogReader, RawPacket
 from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi.devices import (
     Modality,
@@ -58,94 +49,6 @@ class UpgradeRobustnessTests(unittest.TestCase):
             peer.close()
             reader.join(1)
             closer.join(1)
-
-    def test_failed_registry_startup_disconnects_before_ack(self) -> None:
-        device = SiFiBandDevice()
-        events: list[str] = []
-        context = get_context("spawn")
-        commands, acknowledgements = context.Queue(), context.Queue()
-        try:
-            with (
-                patch.object(
-                    device, "connect", side_effect=lambda: events.append("connect")
-                ),
-                patch.object(
-                    device,
-                    "disconnect",
-                    side_effect=lambda: events.append("disconnect"),
-                ),
-                patch.object(SiFiBandDevice, "streams", new=property(lambda _: ())),
-                patch(
-                    "sifi_streamer.acquisition.worker.process._ignore_console_interrupts"
-                ),
-            ):
-                background_main(
-                    StreamerConfig(),
-                    lambda: device,
-                    commands,
-                    acknowledgements,
-                    "unused",
-                )
-            ack = acknowledgements.get(timeout=1)
-            self.assertIsInstance(ack, ErrorAck)
-            self.assertEqual(events, ["connect", "disconnect"])
-        finally:
-            commands.close()
-            acknowledgements.close()
-            commands.join_thread()
-            acknowledgements.join_thread()
-
-    def test_latest_context_survives_capture_boundaries_without_signal_backlog(
-        self,
-    ) -> None:
-        recorder = RecorderFSM(StreamerConfig(), {"info": {"device": "SiFiBand"}})
-        context: dict[str, object] = {
-            "packet_type": "start_time",
-            "start_time": 1,
-            "extension": {"value": 1},
-        }
-        recorder.on_packet(SiFiPacket("start_time", [], {}, 1, document=context))
-        context["extension"] = {"value": 99}
-        recorder.on_packet(SiFiPacket("emg_armband", [0], {"emg0": [1]}, 1))
-        with tempfile.TemporaryDirectory() as directory:
-            for index in range(2):
-                path = Path(directory) / f"{index}.capture.jsonl.zst"
-                recorder.start_capture(path, str(index))
-                recorder.stop_capture()
-                packets = [
-                    record.packet
-                    for record in CaptureLogReader(path)
-                    if isinstance(record, RawPacket)
-                ]
-                self.assertEqual(len(packets), 1)
-                self.assertEqual(packets[0]["extension"], {"value": 1})
-            recorder.on_packet(
-                SiFiPacket(
-                    "start_time",
-                    [],
-                    {},
-                    2,
-                    document={"packet_type": "start_time", "start_time": 2},
-                )
-            )
-            path = Path(directory) / "latest.capture.jsonl.zst"
-            recorder.start_capture(path, "latest")
-            recorder.on_packet(
-                SiFiPacket(
-                    "start_time",
-                    [],
-                    {},
-                    3,
-                    document={"packet_type": "start_time", "start_time": 3},
-                )
-            )
-            recorder.stop_capture()
-            packets = [
-                record.packet
-                for record in CaptureLogReader(path)
-                if isinstance(record, RawPacket)
-            ]
-            self.assertEqual([packet.get("start_time") for packet in packets], [2, 3])
 
     def test_biopoint_registry_and_packet_use_single_emg_channel(self) -> None:
         modalities = modalities_from_device_info(

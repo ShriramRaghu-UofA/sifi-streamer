@@ -9,7 +9,7 @@ test('bundled assets drive a real synthetic capture and preserve annotations on 
 }, testInfo) => {
   test.setTimeout(60000);
   const directory = await mkdtemp(join(tmpdir(), 'sifi-web-browser-'));
-  const capture = join(directory, 'browser.capture.jsonl.zst');
+  const capture = join(directory, 'browser.capture.duckdb');
   const kinds = join(directory, 'kinds.json');
   await writeFile(
     kinds,

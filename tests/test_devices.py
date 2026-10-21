@@ -18,8 +18,7 @@ from sifi_streamer.acquisition import (
     StreamerConfig,
 )
 from sifi_streamer.acquisition.ring_buffer import SeqlockRingBuffer
-from sifi_streamer.acquisition.worker.recorder import RecorderFSM
-from sifi_streamer.capture import CaptureLogReader, RawPacket
+from sifi_streamer.capture import CaptureLogReader, CaptureLogWriter, RawPacket
 from sifi_streamer.exceptions import DeviceError
 from sifi_streamer.sifi import SyntheticSiFiDevice
 from sifi_streamer.sifi.bridge import (
@@ -65,14 +64,14 @@ class DeviceTests(unittest.TestCase):
         for parser_factory in (capture_parser, web_parser):
             for transport in (None, "tcp", "udp", "stdout"):
                 with self.subTest(parser=parser_factory, transport=transport):
-                    arguments = ["session.capture.jsonl.zst", "--capture-id", "session"]
+                    arguments = ["session.capture.duckdb", "--capture-id", "session"]
                     if transport is not None:
                         arguments += ["--transport", transport]
                     args = parser_factory().parse_args(arguments)
                     self.assertEqual(args.transport, transport or "stdout")
         args = web_parser().parse_args(
             [
-                "session.capture.jsonl.zst",
+                "session.capture.duckdb",
                 "--transport",
                 "tcp",
                 "--port",
@@ -110,12 +109,10 @@ class DeviceTests(unittest.TestCase):
         with patch.object(device, "_process", process):
             device._read_stdout()
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "events.capture.jsonl.zst"
-            recorder = RecorderFSM(StreamerConfig(), None)
-            recorder.start_capture(path, "events")
-            while (packet := device._stdout_packets.get_nowait()) is not None:
-                recorder.on_packet(packet)
-            recorder.stop_capture()
+            path = Path(directory) / "events.capture.duckdb"
+            with CaptureLogWriter(path, "events") as recorder:
+                while (packet := device._stdout_packets.get_nowait()) is not None:
+                    recorder.append_packet(packet.capture_document())
             captured = [
                 record.packet
                 for record in CaptureLogReader(path)
@@ -300,13 +297,14 @@ class DeviceTests(unittest.TestCase):
 
     def test_background_synthetic_capture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "synthetic.capture.jsonl.zst"
-            with BackgroundHandle(
+            path = Path(directory) / "synthetic.capture.duckdb"
+            handle = BackgroundHandle(
                 StreamerConfig(ack_timeout_s=3), SyntheticSiFiDevice
-            ) as handle:
-                handle.start_capture(path, "synthetic")
+            )
+            handle.prepare_capture(path, "synthetic", {}, {})
+            with handle:
                 time.sleep(0.03)
-                window = handle.stream_readers[Modality.EMG].read_window(4)
+                window = handle.stream_readers[f"device/{Modality.EMG}"].read_window(4)
                 assert window is not None
                 self.assertEqual(window.shape, (4, 8))
                 handle.stop_capture()

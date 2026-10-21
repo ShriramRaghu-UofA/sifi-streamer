@@ -1,49 +1,41 @@
-"""System-level streamer configuration."""
+"""Immutable acquisition and bounded recorder policies."""
 
 import math
-from compression import zstd
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class StreamerConfig:
-    """Immutable settings shared by foreground and acquisition processes.
-
-    Attributes:
-        ring_buffer_seconds: Per-stream shared-memory history duration.
-        ack_timeout_s: Default foreground wait for worker acknowledgements.
-        capture_log_enabled: Whether the worker permits authoritative recording.
-        capture_frame_target_bytes: Uncompressed bytes buffered per target frame.
-        capture_flush_interval_s: Maximum interval between packet-batch flushes.
-        capture_compression_level: Optional Zstandard compression level.
-        capture_fsync_on_boundary: Synchronize capture and segment boundaries to
-            storage before acknowledging them.
-
-    Raises:
-        ValueError: If a duration or size is non-positive, or the compression
-            level is unsupported by the installed Zstandard implementation.
-    """
+    """Settings for device workers, live history, and recorder admission."""
 
     ring_buffer_seconds: float = 10.0
     ack_timeout_s: float = 2.0
-    capture_log_enabled: bool = True
-    capture_frame_target_bytes: int = 1 << 20
-    capture_flush_interval_s: float = 1.0
-    capture_compression_level: int | None = None
-    capture_fsync_on_boundary: bool = False
+    startup_timeout_s: float = 30.0
+    shutdown_timeout_s: float = 10.0
+    commit_interval_s: float = 1.0
+    transaction_target_bytes: int = 8 << 20
+    producer_buffer_bytes: int = 32 << 20
+    max_submission_bytes: int = 8 << 20
+    enqueue_timeout_s: float = 2.0
 
     def __post_init__(self) -> None:
-        for name, value in (
-            ("ring_buffer_seconds", self.ring_buffer_seconds),
-            ("ack_timeout_s", self.ack_timeout_s),
-            ("capture_flush_interval_s", self.capture_flush_interval_s),
+        for name in (
+            "ring_buffer_seconds",
+            "ack_timeout_s",
+            "startup_timeout_s",
+            "shutdown_timeout_s",
+            "commit_interval_s",
+            "enqueue_timeout_s",
         ):
+            value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        if self.capture_frame_target_bytes <= 0:
-            raise ValueError("capture_frame_target_bytes must be positive")
-        if self.capture_compression_level is not None:
-            try:
-                zstd.ZstdCompressor(level=self.capture_compression_level)
-            except (TypeError, ValueError, zstd.ZstdError) as exc:
-                raise ValueError("capture_compression_level is not supported") from exc
+        for name in (
+            "transaction_target_bytes",
+            "producer_buffer_bytes",
+            "max_submission_bytes",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.max_submission_bytes > self.producer_buffer_bytes:
+            raise ValueError("max_submission_bytes exceeds producer_buffer_bytes")

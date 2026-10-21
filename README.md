@@ -5,7 +5,7 @@
 Pluggable Python 3.14+ acquisition and capture infrastructure with a bundled
 SiFi integration. Inject any device that satisfies the structural acquisition
 protocols to reuse the background worker, shared-memory live signals, health
-monitoring, generic annotations, and authoritative append-only capture logs.
+monitoring, generic annotations, and authoritative DuckDB capture databases.
 Device implementations use composition and dependency injection; they do not
 inherit from package base classes.
 
@@ -131,7 +131,7 @@ from sifi_streamer.sifi import create_sifi_capture
 from sifi_streamer.sifi.sensor_profile import EMG_IMU_PROFILE
 
 capture = create_sifi_capture(
-    Path("session.capture.jsonl.zst"),
+    Path("session.capture.duckdb"),
     "session-001",
     {"site": "lab-a"},
     bridge_executable=Path(r"C:\tools\sifibridge.exe"),
@@ -145,7 +145,7 @@ try:
 finally:
     capture.close()
 
-for record in CaptureLogReader(Path("session.capture.jsonl.zst")):
+for record in CaptureLogReader(Path("session.capture.duckdb")):
     print(record)
 ```
 
@@ -189,38 +189,30 @@ from sifi_streamer.acquisition import SignalChannelSpec, SignalStreamSpec
 from sifi_streamer.acquisition.backend import create_capture_runtime
 
 
-class MyoDevice:
-    @property
-    def streams(self) -> tuple[SignalStreamSpec, ...]:
-        return (
-            SignalStreamSpec(
-                "emg",
-                tuple(SignalChannelSpec(f"emg{i}") for i in range(8)),
-                200.0,
-            ),
-        )
+from functools import partial
+from examples.myo_adapter import MyoDevice
 
-    def connect(self) -> None: ...
-
-    def disconnect(self) -> None: ...
-
-    def read_packet(self) -> "MyoPacket": ...
-
-    @property
-    def device_info(self) -> dict[str, object]: ...
-
-
-runtime = create_capture_runtime(
-    Path("myo.capture.jsonl.zst"),
-    "myo-session-001",
-    MyoDevice,  # top-level, zero-argument, and picklable for the worker process
-)
+# Your SDK adapter implements the small MyoTransport protocol in the example.
+# MyoDevice itself needs no inheritance or registration.
+# runtime = create_capture_runtime(
+#     Path("myo.capture.duckdb"), "capture-001",
+#     {"left": partial(MyoDevice, YourMyoTransport),
+#      "right": partial(MyoDevice, YourOtherMyoTransport)},
+# )
 ```
 
-`MyoPacket` supplies `stream_id`, `timestamps`, channel `data`, health fields,
-and `capture_document()`. See [api.md](api.md) for the complete protocol shape.
-The included SiFi support uses this same boundary; it is an integration rather
-than a privileged acquisition path.
+See [examples/myo_adapter.py](examples/myo_adapter.py) for the complete SDK-neutral
+packet/device implementation. It records samples directly, without requiring a
+raw document. It uses adapter receipt `time.perf_counter_ns()` as its declared
+source clock; that is an adapter observation time, not a hardware measurement
+clock. Each packet supplies timestamps, channel values, explicit validity, and
+health metadata. The integration's thread-safe `request_stop()` unblocks pending
+reads before final `disconnect()`. Factories must be top-level/picklable.
+
+All device layouts register before acquisition starts. Stream identity is
+`(device_id, stream_id)`, and live monitoring exposes device-scoped keys. Dynamic
+stream registration and silent padding/truncation are unsupported. Any unhandled
+device, transport, or recorder error stops the entire capture.
 
 ## CLI capture
 
@@ -238,16 +230,16 @@ each capture; existing captures cannot be overwritten.
 Record EMG and IMU over stdout until Ctrl+C:
 
 ```powershell
-uv run sifi-capture recording.capture.jsonl.zst --capture-id session-001 `
+uv run sifi-capture recording.capture.duckdb --capture-id session-001 `
   --bridge-executable C:\tools\sifibridge.exe --sensor-preset emg-imu
 ```
 
 Record for five minutes over TCP, or enter annotations interactively over UDP:
 
 ```powershell
-uv run sifi-capture timed.capture.jsonl.zst --capture-id baseline `
+uv run sifi-capture timed.capture.duckdb --capture-id baseline `
   --duration 300 --transport tcp --host 127.0.0.1 --port 5000
-uv run sifi-capture notes.capture.jsonl.zst --capture-id annotated `
+uv run sifi-capture notes.capture.duckdb --capture-id annotated `
   --interactive --transport udp --host 127.0.0.1 --port 5000
 ```
 
@@ -268,7 +260,7 @@ Generate an editable, versioned JSON profile and use it from either launcher:
 ```powershell
 sifi-sensor-profile create sensors.json --preset all
 sifi-sensor-profile validate sensors.json
-sifi-capture recording.capture.jsonl.zst --capture-id session-001 `
+sifi-capture recording.capture.duckdb --capture-id session-001 `
   --sensor-profile sensors.json
 ```
 
@@ -296,14 +288,14 @@ orderly so the capture is flushed.
 Start the dashboard with the default stdout transport:
 
 ```powershell
-uv run sifi-capture-web monitored.capture.jsonl.zst --capture-id session-001 `
+uv run sifi-capture-web monitored.capture.duckdb --capture-id session-001 `
   --bridge-executable C:\tools\sifibridge.exe --sensor-preset emg-imu
 ```
 
 Start web capture with **TCP** on port 5000 and the dashboard on port 8080:
 
 ```powershell
-uv run sifi-capture-web tcp.capture.jsonl.zst --capture-id tcp-session `
+uv run sifi-capture-web tcp.capture.duckdb --capture-id tcp-session `
   --transport tcp --host 127.0.0.1 --port 5000 --web-port 8080 `
   --bridge-executable C:\tools\sifibridge.exe --sensor-preset emg-imu
 ```
@@ -311,7 +303,7 @@ uv run sifi-capture-web tcp.capture.jsonl.zst --capture-id tcp-session `
 Use UDP, a saved profile, scalar session metadata, and a reusable kinds file:
 
 ```powershell
-uv run sifi-capture-web udp.capture.jsonl.zst --capture-id udp-session `
+uv run sifi-capture-web udp.capture.duckdb --capture-id udp-session `
   --transport udp --port 5000 --sensor-profile sensors.json `
   --attribute operator=Shriram --attribute session=1 --kinds-file kinds.json `
   --no-open --web-port 8080
@@ -321,7 +313,7 @@ uv run sifi-capture-web udp.capture.jsonl.zst --capture-id udp-session `
 assign a free port. It is separate from the bridge's `--port`. Open the printed
 URL, including its token, and use the page's start/stop controls to record.
 `--no-open` suppresses automatic browser opening. For a hardware-free dashboard,
-use `uv run sifi-capture-web demo.capture.jsonl.zst --synthetic`; omit hardware
+use `uv run sifi-capture-web demo.capture.duckdb --synthetic`; omit hardware
 sensor options. Run either launcher with `--help` for all flags, including sensor
 overrides and web health thresholds.
 
@@ -389,7 +381,7 @@ Save the following as `kinds.json` (UTF-8), then pass it to
 For a hardware-free example:
 
 ```powershell
-uv run sifi-capture-web demo.capture.jsonl.zst --synthetic --kinds-file kinds.json
+uv run sifi-capture-web demo.capture.duckdb --synthetic --kinds-file kinds.json
 ```
 
 The top level is an array, with no wrapper object or schema-version field.
@@ -438,7 +430,7 @@ and the component choices used by the dashboard.
 ## Synthetic capture
 
 ```powershell
-sifi-capture synthetic.capture.jsonl.zst --capture-id dev --synthetic --duration 1
+sifi-capture synthetic.capture.duckdb --capture-id dev --synthetic --duration 1
 ```
 
 For live access, enter a `BackgroundHandle`, inspect `handle.streams`, and read
@@ -447,54 +439,45 @@ reads return source timestamps, native values, and an explicit validity mask.
 `SyntheticSiFiDevice` uses the same generic worker and shared-memory path as
 hardware and custom injected devices.
 
-The `.capture.jsonl.zst` file is authoritative, append-only schema-v3 JSONL in
-concatenated Zstandard frames. New files use exclusive creation and are never
-rewritten. When supplied by the connected device, its complete startup-info
-document is preserved in an explicit `device_info` record; for SiFi
-hardware this includes the bridge-reported firmware, configuration, and sample
-rates.
+The `.capture.duckdb` database is authoritative. One recorder process owns all
+writes; each named device has an independent worker and bounded producer buffer.
+Events carry producer-local and global recording sequences plus host receipt
+monotonic/Unix nanosecond clocks. Typed sample tables preserve source timestamps,
+channel values, and explicit validity. Complete raw documents and dynamic reports
+use VARIANT. Missing raw documents do not suppress typed samples.
 
-Every decoded vendor data packet received while recording is stored as a
-complete `raw_packet`, including `event`, `status`, `memory`, `device_info`,
-`start_time`, and unknown future packet types and fields. Only declared signal
-streams enter shared memory and signal tables; other packets remain available
-through `CaptureLogReader`. Vendor `event` packets remain vendor raw packets;
-application markers and segments have their own authoritative records. The
-latest Start Time packet is retained across acquisition startup and inserted
-after device info when recording starts. Other packets received before the
-capture starts are not backfilled. Bridge command acknowledgements, stderr,
-and malformed/non-object JSON are not capture data. The capture preserves what
-the selected transport delivers; it cannot recover missing BLE samples or UDP
-datagrams (vendor null gaps and loss counts are preserved).
+The recorder commits independently of incoming traffic, normally every second.
+Acknowledgements mean accepted, not durable. Shutdown finishes device producers
+before draining the recorder and closing open segments. Any unhandled failure
+fails the whole capture. Preserve a crashed database together with its `.wal`
+file; explicit `recover_capture(source, destination)` creates a recovered copy
+without rewriting the original. No legacy JSONL reader or migration exists.
 
-Install `sifi-streamer[parquet]` for canonical SiFi pandas tables and derived
-Parquet datasets:
+## SQL inspection and export
 
 ```python
 from pathlib import Path
+from sifi_streamer.capture import CaptureLogReader
 
-from sifi_streamer.sifi import Modality
-from sifi_streamer.sifi.export import read_sifi_capture_tables
-
-tables = read_sifi_capture_tables(Path("session.capture.jsonl.zst"))
-emg = tables.signals[Modality.EMG]
+reader = CaptureLogReader(Path("session.capture.duckdb"))
+print(reader.query("SELECT marker_kind, count(*) FROM markers GROUP BY marker_kind"))
+print(reader.streams())  # discover typed sample table names and source clocks
+reader.export(Path("session-tables"), tables=("events", "markers", "segments"))
 ```
 
 ```powershell
-sifi-capture-to-parquet session.capture.jsonl.zst
+sifi-capture-export session.capture.duckdb session-tables
+sifi-capture-export session.capture.duckdb selected --table markers --table segments
+sifi-capture-export session.capture.duckdb csv-tables --format csv
 ```
 
-The exporter writes a dataset directory containing capture, stream, marker,
-segment, launch configuration, device report, diagnostic, and per-modality signal
-tables. Nested metadata documents are preserved as JSON string columns, including
-empty and repeated reports. Startup failures can export with empty signal views.
-It preserves record sequence and all
-recorded clock domains but does not interpret application-defined kinds or
-filter incomplete/superseded attempts. Conversion is not authoritative.
-
-Third-party integrations can use the public `sifi_streamer.capture.CaptureLogReader`
-and record types to parse complete vendor packet/report JSON themselves, without
-the Parquet extra. See the reader example in [api.md](api.md#capturelogreader).
+DuckDB provides Parquet/CSV export directly; pandas/PyArrow are not required.
+Dynamic columns export as JSON text by default. `--native-variant` explicitly
+requests native VARIANT in Parquet. Export directories must be new. Exports are
+derived artifacts and never alter the database. SQL clients can also query the
+self-describing database directly without importing this package.
+See [examples/inspect_capture.sql](examples/inspect_capture.sql) for catalog,
+event, annotation, and segment queries.
 
 See the [Python API reference](api.md), [architecture.md](architecture.md),
 [compatibility.md](compatibility.md), and [contribution guide](CONTRIBUTING.md).
@@ -505,9 +488,31 @@ Python callers pass `device_handle` to `SiFiBridgeDevice`, `create_sifi_capture`
 or `create_sifi_capture_runtime`. Omission retains first-matching-device
 selection. A supplied handle is sent as `connect HANDLE`; bridge errors abort
 startup without falling back to automatic selection. Synthetic capture rejects
-this option. Capture records are unchanged.
+this option.
 
-## Capture provenance and diagnostics (schema 3)
+For explicit device names, both `sifi-capture` and `sifi-capture-web` accept
+repeatable `--device ID=HANDLE` options. Use one option for a single band, or two
+for simultaneous recording into the same database:
+
+```powershell
+uv run sifi-capture one.capture.duckdb --capture-id one --device left=BioPoint_AA92 --duration 30
+uv run sifi-capture two.capture.duckdb --capture-id two --device left=BioPoint_AA92 --device right=BioPoint_BB93 --duration 30
+uv run sifi-capture-web two-live.capture.duckdb --device left=BioPoint_AA92 --device right=BioPoint_BB93
+```
+
+Replace the example handles with your devices' BLE names, MAC addresses, or UUIDs.
+Each band gets its own bridge process and streams such as `left/emg` and
+`right/emg`. The bridge executable, transport, and sensor profile apply to all
+devices. Stdout is the default transport and needs no separate ports. TCP/UDP
+assign consecutive ports starting at `--port`, in option order. Device IDs and
+handles must be unique. `--device` cannot be combined with `--device-handle` or
+`--synthetic`. Any unhandled device failure stops the entire capture.
+
+Python callers can pass `device_handles={"left": "BioPoint_AA92", "right":
+"BioPoint_BB93"}` to either SiFi composition function. Device declarations and
+per-device bridge settings are saved in the database launch configuration.
+
+## Capture provenance and diagnostics
 
 A composed capture starts before hardware connection. Its first records are
 `capture_started` and `launch_configuration`, containing resolved integration and

@@ -175,6 +175,7 @@ class WorkerHealthCollector:
         samples_lost: int,
         status: str,
         misaligned: bool,
+        evaluate_source_timing: bool = True,
         now: float | None = None,
     ) -> None:
         counter = self._streams[stream_id]
@@ -192,7 +193,7 @@ class WorkerHealthCollector:
                 counter.valid_value_count += bool(valid)
                 missing[index] += not valid
         counter.missing_by_channel = tuple(missing)
-        for timestamp in timestamps:
+        for timestamp in timestamps if evaluate_source_timing else ():
             if counter.last_source_timestamp is not None:
                 delta = timestamp - counter.last_source_timestamp
                 if delta > 0:

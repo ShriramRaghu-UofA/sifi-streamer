@@ -285,7 +285,7 @@
       class="text-xs muted flex flex-wrap items-center justify-between gap-3 border-t border-surface-200-800 pt-5"
     >
       <span class="flex items-center gap-2"
-        ><FileCheck2 size={14} />Authoritative capture · JSONL / Zstandard</span
+        ><FileCheck2 size={14} />Authoritative capture · DuckDB</span
       ><span>Local session · data stays on this machine</span>
     </footer>
   {/if}

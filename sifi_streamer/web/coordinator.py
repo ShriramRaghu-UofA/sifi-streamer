@@ -257,6 +257,9 @@ class WebCaptureCoordinator:
             if self._runtime is not None:
                 self._provenance()
                 self._runtime.controller.close(reason)
+        except Exception as exc:
+            self._error = _error_message(exc)
+            raise
         finally:
             if self._health_log is not None:
                 self._health_log.append(
@@ -382,6 +385,9 @@ class WebCaptureCoordinator:
                 "state": self._state,
                 "error": self._error,
                 "health": _wire(snapshot),
+                "recorder": _wire(self._runtime.monitor.recorder_stats)
+                if self._runtime is not None
+                else None,
                 "events": _wire(
                     self._runtime.monitor.events if self._runtime is not None else ()
                 ),

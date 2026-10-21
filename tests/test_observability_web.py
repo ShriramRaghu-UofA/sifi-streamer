@@ -33,6 +33,7 @@ class CustomPacket:
         self.stream_id = "force/left"
         self.timestamps = [index / 100]
         self.data = {"force": [index], "quality": [None if index % 2 else index]}
+        self.validity = {"force": [True], "quality": [True]}
         self.reported_rate_hz = 99.5
         self.samples_lost = 0
         self.status = "ok"
@@ -77,6 +78,9 @@ class CustomDevice:
     def disconnect(self) -> None:
         self._connected = False
 
+    def request_stop(self) -> None:
+        self._connected = False
+
     def read_packet(self) -> CustomPacket:
         if not self._connected:
             raise RuntimeError("not connected")
@@ -100,7 +104,7 @@ class ObservabilityTests(unittest.TestCase):
 
             runtime.controller.start.side_effect = fail
             coordinator = WebCaptureCoordinator(
-                Path(directory) / "failed.capture.jsonl.zst",
+                Path(directory) / "failed.capture.duckdb",
                 lambda capture_id, attributes, configuration: runtime,
             )
             server = _WebServer(("127.0.0.1", 0), _Handler)
@@ -139,7 +143,7 @@ class ObservabilityTests(unittest.TestCase):
     def test_factory_failure_sets_failed_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             coordinator = WebCaptureCoordinator(
-                Path(directory) / "failed.capture.jsonl.zst",
+                Path(directory) / "failed.capture.duckdb",
                 Mock(side_effect=DeviceError("factory failed")),
             )
             with self.assertRaisesRegex(DeviceError, "factory failed"):
@@ -149,22 +153,24 @@ class ObservabilityTests(unittest.TestCase):
 
     def test_custom_stream_validity_cursor_and_health(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "custom.capture.jsonl.zst"
+            output = Path(directory) / "custom.capture.duckdb"
             runtime = create_capture_runtime(output, "custom", CustomDevice)
             runtime.controller.start()
             try:
                 time.sleep(0.04)
                 streams = runtime.monitor.streams
-                self.assertEqual(streams[0].stream_id, "force/left")
+                self.assertEqual(streams[0].stream_id, "device/force/left")
                 self.assertEqual(streams[0].channel_units, ("N", None))
-                window = runtime.monitor.read_since("force/left", 0)
+                window = runtime.monitor.read_since("device/force/left", 0)
                 assert window is not None
                 self.assertEqual(window.samples.dtype, np.dtype(np.int64))
                 self.assertTrue(window.validity[:, 0].all())
                 self.assertTrue((~window.validity[:, 1]).any())
-                self.assertIsNone(
-                    runtime.monitor.read_since("force/left", window.end_index)
+                next_window = runtime.monitor.read_since(
+                    "device/force/left", window.end_index
                 )
+                if next_window is not None:
+                    self.assertEqual(next_window.start_index, window.end_index)
                 time.sleep(0.3)
                 health = runtime.monitor.latest()
                 assert health is not None
@@ -196,7 +202,7 @@ class ObservabilityTests(unittest.TestCase):
 
     def test_web_coordinator_lifecycle_and_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "web.capture.jsonl.zst"
+            output = Path(directory) / "web.capture.duckdb"
 
             def factory(capture_id, attributes, configuration):
                 return create_sifi_capture_runtime(
@@ -229,7 +235,7 @@ class ObservabilityTests(unittest.TestCase):
             live = coordinator.live({})
             batches = live["batches"]
             assert isinstance(batches, dict)
-            self.assertIn("emg_armband", batches)
+            self.assertIn("device/emg_armband", batches)
             coordinator.stop()
             self.assertEqual(coordinator.bootstrap()["state"], "stopped")
             self.assertTrue(Path(directory, "web.health.jsonl").exists())

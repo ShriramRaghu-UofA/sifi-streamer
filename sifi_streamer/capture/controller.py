@@ -33,6 +33,10 @@ class CaptureBackend(Protocol):
         """Flush and release backend resources using ``reason``."""
         ...
 
+    def quiesce(self) -> None:
+        """Finish acquisition producers while keeping annotations available."""
+        ...
+
     def start_segment(self, segment_id: str, kind: str, attributes: Attributes) -> None:
         """Record the start boundary for one generic segment."""
         ...
@@ -81,6 +85,7 @@ class CaptureController:
         self._segments: list[str] = []
         self._start_attempted = False
         self._backend_stopped = False
+        self._closing = False
         self.started = False
 
     def start(self) -> None:
@@ -94,6 +99,8 @@ class CaptureController:
                 exception is available as the cause.
             RuntimeError: If startup was already attempted and did not succeed.
         """
+        if self._closing:
+            raise RuntimeError("capture session is closing or closed")
         if self.started:
             return
         if self._start_attempted:
@@ -109,7 +116,7 @@ class CaptureController:
         logger.info("Capture controller started")
 
     def _require_started(self) -> None:
-        if not self.started:
+        if not self.started or self._closing:
             raise RuntimeError("capture session has not started")
 
     def marker(
@@ -181,22 +188,32 @@ class CaptureController:
         logger.info("Stopped capture backend with reason %r", reason)
 
     def close(self, reason: str = "normal_completion") -> None:
-        """Close open segments and stop the backend exactly once.
+        """Finish producers, close open segments, and finalize exactly once.
 
         Remaining segments receive ``"completed"`` after normal completion and
         ``"aborted"`` for every other capture close reason. Calling ``close``
         again is a no-op.
         """
-        if self._backend_stopped:
+        if self._backend_stopped or self._closing:
             return
+        self._closing = True
         segment_reason = "completed" if reason == "normal_completion" else "aborted"
         error: BaseException | None = None
         if self.started:
+            try:
+                self._backend.quiesce()
+            except BaseException as exc:
+                error = exc
+                reason = "acquisition_failure"
+                segment_reason = "aborted"
             while self._segments:
                 try:
-                    self.stop_segment(self._segments[-1], segment_reason)
+                    self._backend.stop_segment(self._segments[-1], segment_reason)
+                    self._segments.pop()
                 except BaseException as exc:
-                    error = exc
+                    if error is None:
+                        error = exc
+                    reason = "recording_failure"
                     break
         try:
             if self._start_attempted:

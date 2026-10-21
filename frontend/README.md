@@ -78,7 +78,7 @@ Test screenshots and traces are under `test-results` and are ignored by Git.
 First start the Python backend from the repository root with a fresh output path:
 
 ```powershell
-uv run sifi-capture-web dev.capture.jsonl.zst --synthetic --no-open --web-port 8080
+uv run sifi-capture-web dev.capture.duckdb --synthetic --no-open --web-port 8080
 ```
 
 In another terminal, from `frontend`:

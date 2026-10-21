@@ -10,6 +10,7 @@ from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.capture.records import Packet, Scalar
 from sifi_streamer.capture.runners import parse_attributes
 from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE, BridgeTransport
+from sifi_streamer.sifi.cli.device_options import add_device_arguments, resolve_devices
 from sifi_streamer.sifi.cli.sensor_options import (
     add_sensor_arguments,
     resolve_sensor_profile,
@@ -50,11 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bridge-executable", type=Path, default=DEFAULT_BRIDGE_EXECUTABLE
     )
-    parser.add_argument(
-        "--device-handle",
-        metavar="HANDLE",
-        help="BLE name, MAC (Windows/Linux), or UUID (macOS); default: auto-connect",
-    )
+    add_device_arguments(parser)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument(
@@ -100,11 +97,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
-    if args.synthetic and args.device_handle is not None:
-        parser.error("--device-handle cannot be used with --synthetic")
+    if args.synthetic and (args.device_handle is not None or args.device is not None):
+        parser.error("--device and --device-handle cannot be used with --synthetic")
     if args.synthetic and sensor_options_used(args):
         parser.error("sensor profile options cannot be used with --synthetic")
     try:
+        device_handles = resolve_devices(args.device)
         thresholds = HealthThresholds(
             args.health_window,
             args.stale_after,
@@ -126,6 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             capture_attributes,
             bridge_executable=args.bridge_executable,
             device_handle=args.device_handle,
+            device_handles=device_handles,
             host=args.host,
             port=args.port,
             transport=args.transport,
@@ -143,6 +142,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "transport": str(args.transport),
         "device_handle": args.device_handle,
     }
+    if device_handles is not None:
+        configuration_summary["devices"] = ", ".join(
+            f"{name}={handle}" for name, handle in device_handles.items()
+        )
     if sensor_profile is not None:
         configuration_summary.update(sensor_profile_summary(sensor_profile))
     serve_capture_web(

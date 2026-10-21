@@ -51,6 +51,75 @@ def _device_factory(
     )
 
 
+def _device_factories(
+    *,
+    device_handles: Mapping[str, str] | None,
+    bridge_executable: str | Path,
+    device_handle: str | None,
+    host: str,
+    port: int,
+    transport: BridgeTransport | str,
+    sensor_profile: SiFiSensorProfile | None,
+    synthetic: bool,
+) -> tuple[DeviceFactory | dict[str, DeviceFactory], dict[str, object]]:
+    if device_handles is not None:
+        if device_handle is not None or synthetic:
+            raise ValueError(
+                "device_handles cannot be combined with device_handle or synthetic"
+            )
+        if not device_handles:
+            raise ValueError("device_handles must contain at least one device")
+        if any(
+            not name or name != name.strip() or "/" in name for name in device_handles
+        ):
+            raise ValueError("device IDs must be non-empty trimmed strings without '/'")
+        handles = list(device_handles.values())
+        if any(
+            not handle.strip() or any(c in handle for c in "\r\n\0")
+            for handle in handles
+        ):
+            raise ValueError(
+                "device handles must be nonempty and contain no CR, LF, or NUL"
+            )
+        if len(set(handles)) != len(handles):
+            raise ValueError("each device must have a distinct handle")
+    selections = (
+        dict(device_handles)
+        if device_handles is not None
+        else {"device": device_handle}
+    )
+    transport = BridgeTransport(transport)
+    if not 1 <= port <= 65535 or (
+        transport != BridgeTransport.STDOUT and port + len(selections) - 1 > 65535
+    ):
+        raise ValueError("device ports must be in the range 1..65535")
+    factories: dict[str, DeviceFactory] = {}
+    configurations: dict[str, dict[str, object]] = {}
+    for index, (name, handle) in enumerate(selections.items()):
+        device_port = port if transport == BridgeTransport.STDOUT else port + index
+        factories[name] = _device_factory(
+            bridge_executable=bridge_executable,
+            device_handle=handle,
+            host=host,
+            port=device_port,
+            transport=transport,
+            sensor_profile=sensor_profile,
+            synthetic=synthetic,
+        )
+        configurations[name] = _launch_configuration(
+            bridge_executable,
+            handle,
+            host,
+            device_port,
+            transport,
+            sensor_profile,
+            synthetic,
+        )
+    if device_handles is None:
+        return factories["device"], configurations["device"]
+    return factories, {"devices": configurations}
+
+
 def _launch_configuration(
     bridge_executable: str | Path,
     device_handle: str | None,
@@ -80,6 +149,7 @@ def create_sifi_capture(
     *,
     bridge_executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
     device_handle: str | None = None,
+    device_handles: Mapping[str, str] | None = None,
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.STDOUT,
@@ -89,7 +159,8 @@ def create_sifi_capture(
     launch_configuration: Packet | None = None,
 ) -> CaptureController:
     """Compose a ready-to-start controller for real or synthetic SiFi capture."""
-    factory = _device_factory(
+    factory, integration = _device_factories(
+        device_handles=device_handles,
         bridge_executable=bridge_executable,
         device_handle=device_handle,
         host=host,
@@ -106,15 +177,7 @@ def create_sifi_capture(
             capture_id,
             attributes,
             launch_configuration={
-                "integration": _launch_configuration(
-                    bridge_executable,
-                    device_handle,
-                    host,
-                    port,
-                    transport,
-                    sensor_profile,
-                    synthetic,
-                ),
+                "integration": integration,
                 **dict(launch_configuration or {}),
             },
         )
@@ -128,6 +191,7 @@ def create_sifi_capture_runtime(
     *,
     bridge_executable: str | Path = DEFAULT_BRIDGE_EXECUTABLE,
     device_handle: str | None = None,
+    device_handles: Mapping[str, str] | None = None,
     host: str = "127.0.0.1",
     port: int = 5000,
     transport: BridgeTransport | str = BridgeTransport.STDOUT,
@@ -138,7 +202,8 @@ def create_sifi_capture_runtime(
     launch_configuration: Packet | None = None,
 ) -> CaptureRuntime:
     """Compose the standard SiFi device with controller and monitor access."""
-    factory = _device_factory(
+    factory, integration = _device_factories(
+        device_handles=device_handles,
         bridge_executable=bridge_executable,
         device_handle=device_handle,
         host=host,
@@ -155,15 +220,7 @@ def create_sifi_capture_runtime(
         config=config,
         thresholds=thresholds,
         launch_configuration={
-            "integration": _launch_configuration(
-                bridge_executable,
-                device_handle,
-                host,
-                port,
-                transport,
-                sensor_profile,
-                synthetic,
-            ),
+            "integration": integration,
             **dict(launch_configuration or {}),
         },
     )

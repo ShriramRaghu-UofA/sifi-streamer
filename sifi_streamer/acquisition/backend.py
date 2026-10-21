@@ -29,14 +29,15 @@ class AcquisitionCaptureBackend:
     def __init__(
         self,
         config: StreamerConfig,
-        device_factory: DeviceFactory,
+        device_factory: DeviceFactory | Mapping[str, DeviceFactory],
         capture_file: Path,
         capture_id: str,
         attributes: Attributes | None = None,
         *,
         launch_configuration: Packet | None = None,
         handle_factory: Callable[
-            [StreamerConfig, DeviceFactory], BackgroundHandle
+            [StreamerConfig, DeviceFactory | Mapping[str, DeviceFactory]],
+            BackgroundHandle,
         ] = BackgroundHandle,
     ) -> None:
         self._handle = handle_factory(config, device_factory)
@@ -84,6 +85,11 @@ class AcquisitionCaptureBackend:
                 self._entered = False
                 self._handle.__exit__(None, None, None)
 
+    def quiesce(self) -> None:
+        """Finish device producers before the controller closes open segments."""
+        if self._entered:
+            self._handle.stop_devices()
+
     def record_event(self, event: CaptureEvent) -> None:
         """Persist a report or diagnostic through the owned worker."""
         self._handle.record_event(event)
@@ -101,7 +107,7 @@ class AcquisitionCaptureBackend:
 def create_capture_runtime(
     capture_file: Path,
     capture_id: str,
-    device_factory: DeviceFactory,
+    device_factory: DeviceFactory | Mapping[str, DeviceFactory],
     attributes: Mapping[str, Scalar] | None = None,
     *,
     config: StreamerConfig | None = None,
