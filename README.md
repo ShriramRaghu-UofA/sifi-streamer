@@ -662,6 +662,12 @@ assign consecutive ports starting at `--port`, in option order. Device IDs and
 handles must be unique. `--device` cannot be combined with `--device-handle` or
 `--synthetic`. Any unhandled device failure stops the entire capture.
 
+The dashboard shows a connection card for each device ID, including its requested
+handle before startup and its reported identity after connection. Each card has
+its own expandable device report. Requested handles and reports remain visible
+after stopping. The sensor settings summary is shared; the available signal
+streams are discovered separately for each connected device.
+
 Python callers can pass `device_handles={"left": "BioPoint_AA92", "right":
 "BioPoint_BB93"}` to either SiFi composition function. Device declarations and
 per-device bridge settings are saved in the database launch configuration.

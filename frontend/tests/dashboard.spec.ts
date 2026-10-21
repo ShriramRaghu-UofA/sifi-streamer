@@ -5,31 +5,66 @@ test('requested device becomes reported identity and remains visible after stopp
   page,
 }) => {
   const { session } = await mockSession(page);
-  session.configuration.device_handle = 'SiFiBand_AA92';
+  session.devices.device.requested.Handle = 'SiFiBand_AA92';
   await page.goto('/#test-token');
-  await expect(page.getByRole('heading', { name: 'Requested connection' })).toBeVisible();
-  await expect(
-    page
-      .getByRole('heading', { name: 'Requested connection' })
-      .locator('..')
-      .getByText('SiFiBand_AA92', { exact: true }),
-  ).toBeVisible();
-  session.device_info = {
+  const device = page.getByRole('region', { name: 'Device device', exact: true });
+  await expect(device.getByText('Requested connection', { exact: true })).toBeVisible();
+  await expect(device.getByText('SiFiBand_AA92', { exact: true })).toBeVisible();
+  session.devices.device.info = {
     info: { name: 'SiFiBand_AA92', mac: 'AA:BB:CC:DD:EE:FF', vendor: { value: [1, null] } },
   };
-  session.device_summary = { Name: 'SiFiBand_AA92', 'MAC address': 'AA:BB:CC:DD:EE:FF' };
+  session.devices.device.summary = { Name: 'SiFiBand_AA92', 'MAC address': 'AA:BB:CC:DD:EE:FF' };
   session.launch_configuration = { requested: { device_handle: 'SiFiBand_AA92' } };
   await page.getByRole('button', { name: 'Start capture', exact: true }).click();
   await page.getByRole('tab', { name: 'Session', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Reported device' })).toBeVisible();
+  await expect(device.getByText('Reported device', { exact: true })).toBeVisible();
   await expect(page.getByText('AA:BB:CC:DD:EE:FF', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Device report', exact: true }).click();
+  await device.locator('summary').click();
   await expect(page.locator('pre').filter({ hasText: 'vendor' })).toBeVisible();
   await page.getByRole('button', { name: 'Recorded launch configuration', exact: true }).click();
   await expect(page.locator('pre').filter({ hasText: 'requested' })).toBeVisible();
   await page.getByRole('button', { name: 'Stop & save' }).click();
   await page.getByRole('button', { name: 'Stop and save', exact: true }).click();
   await expect(page.getByText('AA:BB:CC:DD:EE:FF', { exact: true })).toBeVisible();
+});
+
+test('named device cards keep requested handles and reports separate through capture', async ({
+  page,
+}, testInfo) => {
+  const { session } = await mockSession(page);
+  session.devices = {
+    left: { requested: { Handle: 'Band_A', Transport: 'stdout' }, info: {}, summary: {} },
+    right: { requested: { Handle: 'Point_B', Transport: 'stdout' }, info: {}, summary: {} },
+  };
+  await page.goto('/#test-token');
+  const left = page.getByRole('region', { name: 'Device left', exact: true });
+  const right = page.getByRole('region', { name: 'Device right', exact: true });
+  await expect(left.getByText('Band_A', { exact: true })).toBeVisible();
+  await expect(right.getByText('Point_B', { exact: true })).toBeVisible();
+  await expect(left.getByText('Point_B', { exact: true })).toHaveCount(0);
+  session.devices.left.info = { info: { name: 'Reported band', serial: 'serial-left' } };
+  session.devices.left.summary = { Name: 'Reported band', Model: 'SiFiBand' };
+  session.devices.right.info = { info: { name: 'Reported point', serial: 'serial-right' } };
+  session.devices.right.summary = { Name: 'Reported point', Model: 'BioPoint' };
+  await page.getByRole('button', { name: 'Start capture', exact: true }).click();
+  await page.getByRole('tab', { name: 'Session', exact: true }).click();
+  await expect(left.getByText('Reported band', { exact: true })).toBeVisible();
+  await expect(right.getByText('Reported point', { exact: true })).toBeVisible();
+  await expect(left.getByText('Band_A', { exact: true })).toBeVisible();
+  await right.locator('summary').click();
+  await expect(right.locator('pre')).toContainText('serial-right');
+  await expect(right.locator('pre')).not.toContainText('serial-left');
+  session.devices.right.summary.Name = 'Updated point';
+  await expect(right.getByText('Updated point', { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('devices-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('devices-mobile.png'), fullPage: true });
+
+  await page.getByRole('button', { name: 'Stop & save' }).click();
+  await page.getByRole('button', { name: 'Stop and save', exact: true }).click();
+  await expect(left.getByText('Reported band', { exact: true })).toBeVisible();
+  await expect(right.getByText('Updated point', { exact: true })).toBeVisible();
 });
 
 test('sensor summary surfaces rates and disabled sensors with settings collapsed', async ({

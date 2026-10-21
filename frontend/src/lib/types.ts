@@ -3,8 +3,14 @@ export type Attributes = Record<string, Scalar>;
 export type JsonValue = Scalar | JsonValue[] | { [key: string]: JsonValue };
 export type JsonDocument = Record<string, JsonValue>;
 export type Provenance = {
-  device_info: JsonDocument;
-  device_summary: Attributes;
+  devices: Record<
+    string,
+    {
+      requested: Attributes;
+      info: JsonDocument;
+      summary: Attributes;
+    }
+  >;
   launch_configuration: JsonDocument;
 };
 export type Phase = 'setup' | 'starting' | 'recording' | 'stopping' | 'stopped' | 'failed';

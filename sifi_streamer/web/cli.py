@@ -148,10 +148,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if sensor_profile is not None:
         configuration_summary.update(sensor_profile_summary(sensor_profile))
+    selections = device_handles or {"device": args.device_handle}
+    requested_devices: dict[str, dict[str, Scalar]] = {}
+    for index, (name, handle) in enumerate(selections.items()):
+        settings: dict[str, Scalar] = {
+            "Handle": "Synthetic device"
+            if args.synthetic
+            else handle or "Automatic selection",
+            "Transport": str(args.transport),
+        }
+        if not args.synthetic and args.transport != BridgeTransport.STDOUT:
+            settings.update({"Host": args.host, "Port": args.port + index})
+        requested_devices[name] = settings
     serve_capture_web(
         args.output,
         factory,
         configuration_summary=configuration_summary,
+        requested_devices=requested_devices,
         device_info_formatter=sifi_device_summary,
         default_capture_id=args.capture_id,
         default_attributes=attributes,

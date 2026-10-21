@@ -4,13 +4,16 @@
   import MetadataEditor from './MetadataEditor.svelte';
   import type { Dashboard } from '../lib/dashboard.svelte.js';
   import { formatRate, title } from '../lib/types';
-  import type { Stream } from '../lib/types';
+  import type { Provenance, Stream } from '../lib/types';
   let { dashboard, metadataValid = $bindable(true) } = $props<{
     dashboard: Dashboard;
     metadataValid?: boolean;
   }>();
   let editable = $derived(dashboard.phase === 'setup');
   let provenance = $derived(dashboard.live ?? dashboard.bootstrap);
+  let devices: [string, Provenance['devices'][string]][] = $derived(
+    provenance ? Object.entries(provenance.devices) : [],
+  );
   let configuration = $derived(dashboard.bootstrap?.configuration ?? {});
   let sensors: { id: string; label: string; rate: number; enabled: boolean }[] = $derived.by(() => {
     const configured = [
@@ -88,7 +91,7 @@
   </section>
   <section class="panel min-w-0 space-y-5">
     <div>
-      <p class="eyebrow">02 / Device</p>
+      <p class="eyebrow">02 / Devices</p>
       <h2 class="h3 mt-2">Acquisition configuration</h2>
       <p class="muted mt-2 text-sm">Set by the launcher. Review it before starting.</p>
     </div>
@@ -102,30 +105,64 @@
         {/if}
       {/each}
     </dl>
-    <div class="rounded-container border border-surface-200-800 p-4 space-y-3">
-      <h3 class="text-sm font-semibold">{editable ? 'Requested connection' : 'Reported device'}</h3>
-      {#if Object.keys(provenance?.device_summary ?? {}).length}
-        <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {#each Object.entries(provenance?.device_summary ?? {}) as [key, value] (key)}
-            <div class="min-w-0">
-              <dt class="field-hint">{key}</dt>
-              <dd class="mt-1 text-sm font-medium break-all">{value}</dd>
-            </div>
-          {/each}
-        </dl>
-      {:else if editable}
-        <p class="text-sm break-all">{configuration.device_handle ?? 'Automatic selection'}</p>
-        <p class="field-hint">Device identity will appear after connection.</p>
+    <div class="space-y-4" aria-label="Device connections">
+      {#each devices as [deviceId, device] (deviceId)}
+        <section
+          class="rounded-container border border-surface-200-800 p-4 space-y-3"
+          aria-label={`Device ${deviceId}`}
+        >
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 class="text-base font-semibold break-all">{deviceId}</h3>
+            <p class="muted text-xs">{editable ? 'Requested connection' : 'Reported device'}</p>
+          </div>
+          <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {#each Object.entries(device.requested) as [key, value] (key)}
+              <div class="min-w-0">
+                <dt class="field-hint">{key === 'Handle' ? 'Requested handle' : key}</dt>
+                <dd class="mt-1 text-sm break-all">{value}</dd>
+              </div>
+            {/each}
+          </dl>
+          {#if Object.keys(device.summary).length}
+            <dl class="grid grid-cols-1 gap-3 border-t border-surface-200-800 pt-3 sm:grid-cols-2">
+              {#each Object.entries(device.summary) as [key, value] (key)}
+                <div class="min-w-0">
+                  <dt class="field-hint">{key}</dt>
+                  <dd class="mt-1 text-sm font-medium break-all">{value}</dd>
+                </div>
+              {/each}
+            </dl>
+          {:else}
+            <p class="muted text-sm">
+              {editable
+                ? 'Device identity will appear after connection.'
+                : Object.keys(device.info).length
+                  ? 'Device report available in details.'
+                  : 'No device information reported.'}
+            </p>
+          {/if}
+          <details>
+            <summary class="cursor-pointer text-sm font-medium">Device report: {deviceId}</summary>
+            <pre
+              class="mt-3 whitespace-pre-wrap break-all rounded-container bg-surface-200-800 p-4 text-xs">{JSON.stringify(
+                device.info,
+                null,
+                2,
+              )}</pre>
+          </details>
+        </section>
       {:else}
-        <p class="muted text-sm">
-          {Object.keys(provenance?.device_info ?? {}).length
-            ? 'Device report available in details.'
-            : 'No device information reported.'}
-        </p>
-      {/if}
+        <p class="muted text-sm">Device connections will appear when acquisition starts.</p>
+      {/each}
     </div>
     <div class="space-y-3">
       <h3 class="text-sm font-semibold">Sensor streams</h3>
+      {#if devices.length > 1}
+        <p class="field-hint">
+          Requested sensor settings apply to all devices. Actual available streams appear after
+          connection.
+        </p>
+      {/if}
       <ul class="grid grid-cols-2 gap-3 sm:grid-cols-3" aria-label="Sensor streams">
         {#each sensors as sensor (sensor.id)}
           <li
@@ -176,21 +213,6 @@
               </div>{/each}
           </dl></Accordion.ItemContent
         >
-      </Accordion.Item>
-      <Accordion.Item value="device-info">
-        <Accordion.ItemTrigger
-          ><span>Device report</span><Accordion.ItemIndicator
-            ><ChevronDown size={17} /></Accordion.ItemIndicator
-          ></Accordion.ItemTrigger
-        >
-        <Accordion.ItemContent>
-          <pre
-            class="mt-3 whitespace-pre-wrap break-all rounded-container bg-surface-200-800 p-4 text-xs">{JSON.stringify(
-              provenance?.device_info ?? {},
-              null,
-              2,
-            )}</pre>
-        </Accordion.ItemContent>
       </Accordion.Item>
       <Accordion.Item value="launch-configuration">
         <Accordion.ItemTrigger

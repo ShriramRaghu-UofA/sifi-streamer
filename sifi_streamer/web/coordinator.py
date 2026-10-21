@@ -69,6 +69,7 @@ class WebCaptureCoordinator:
         runtime_factory: RuntimeFactory,
         *,
         configuration_summary: Mapping[str, Scalar] | None = None,
+        requested_devices: Mapping[str, Attributes] | None = None,
         default_capture_id: str = "capture",
         default_attributes: Mapping[str, Scalar] | None = None,
         thresholds: HealthThresholds | None = None,
@@ -77,8 +78,11 @@ class WebCaptureCoordinator:
         device_info_formatter: Callable[[Packet], Attributes] | None = None,
     ) -> None:
         self._device_info_formatter = device_info_formatter
-        self._device_info: dict[str, object] = {}
-        self._device_summary: dict[str, Scalar] = {}
+        self._requested_devices = {
+            name: validate_attributes(settings)
+            for name, settings in (requested_devices or {}).items()
+        }
+        self._device_infos: dict[str, dict[str, object]] = {}
         self._launch_configuration: dict[str, object] = {}
         self.output = output
         self._factory = runtime_factory
@@ -179,9 +183,7 @@ class WebCaptureCoordinator:
                 self._state = "failed"
                 try:
                     if runtime is not None:
-                        self._device_info = validate_document(
-                            runtime.monitor.device_info
-                        )
+                        self._device_infos = runtime.monitor.device_infos
                         self._launch_configuration = validate_document(
                             runtime.monitor.launch_configuration
                         )
@@ -400,17 +402,25 @@ class WebCaptureCoordinator:
 
     def _provenance(self) -> dict[str, object]:
         if self._runtime is not None:
-            self._device_info = validate_document(self._runtime.monitor.device_info)
+            self._device_infos = self._runtime.monitor.device_infos
             self._launch_configuration = validate_document(
                 self._runtime.monitor.launch_configuration
             )
-        if self._device_info_formatter is not None:
-            self._device_summary = validate_attributes(
-                self._device_info_formatter(self._device_info)
+        devices: dict[str, object] = {}
+        for name in dict.fromkeys((*self._requested_devices, *self._device_infos)):
+            info = validate_document(self._device_infos.get(name, {}))
+            summary = (
+                validate_attributes(self._device_info_formatter(info))
+                if info and self._device_info_formatter is not None
+                else {}
             )
+            devices[name] = {
+                "requested": self._requested_devices.get(name, {}),
+                "info": info,
+                "summary": summary,
+            }
         return {
-            "device_info": self._device_info,
-            "device_summary": self._device_summary,
+            "devices": devices,
             "launch_configuration": self._launch_configuration,
         }
 
@@ -603,6 +613,7 @@ def serve_capture_web(
     runtime_factory: RuntimeFactory,
     *,
     configuration_summary: Mapping[str, Scalar] | None = None,
+    requested_devices: Mapping[str, Attributes] | None = None,
     default_capture_id: str = "capture",
     default_attributes: Mapping[str, Scalar] | None = None,
     thresholds: HealthThresholds | None = None,
@@ -617,6 +628,7 @@ def serve_capture_web(
         output,
         runtime_factory,
         configuration_summary=configuration_summary,
+        requested_devices=requested_devices,
         default_capture_id=default_capture_id,
         default_attributes=default_attributes,
         thresholds=thresholds,

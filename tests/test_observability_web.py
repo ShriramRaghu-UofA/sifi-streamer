@@ -90,10 +90,65 @@ class CustomDevice:
 
 
 class ObservabilityTests(unittest.TestCase):
+    def test_named_device_reports_survive_updates_and_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Mock()
+            runtime.monitor.device_infos = {
+                "left": {"name": "Band A", "serial": "A"},
+                "right": {"name": "Band B", "serial": "B"},
+            }
+            runtime.monitor.launch_configuration = {}
+            runtime.monitor.streams = ()
+            runtime.monitor.latest.return_value = None
+            coordinator = WebCaptureCoordinator(
+                Path(directory) / "test.capture.duckdb",
+                lambda capture_id, attributes, configuration: runtime,
+                requested_devices={"left": {"Handle": "A"}, "right": {"Handle": "B"}},
+                device_info_formatter=lambda info: {"Name": str(info["name"])},
+                health_log_enabled=False,
+            )
+            before = coordinator.bootstrap()["devices"]
+            assert isinstance(before, dict)
+            self.assertEqual(before["left"]["requested"], {"Handle": "A"})
+            self.assertEqual(before["right"]["info"], {})
+            coordinator.start("test", {})
+            try:
+                after = coordinator.bootstrap()["devices"]
+                assert isinstance(after, dict)
+                self.assertEqual(after["left"]["summary"], {"Name": "Band A"})
+                self.assertEqual(after["right"]["info"]["serial"], "B")
+                runtime.monitor.device_infos["right"]["name"] = "Updated B"
+                updated = coordinator.bootstrap()["devices"]
+                assert isinstance(updated, dict)
+                self.assertEqual(updated["right"]["summary"], {"Name": "Updated B"})
+                self.assertEqual(after["right"]["info"]["name"], "Band B")
+            finally:
+                coordinator.stop()
+            self.assertEqual(coordinator.bootstrap()["devices"], updated)
+
+    def test_failed_start_keeps_reports_associated_with_device_ids(self) -> None:
+        runtime = Mock()
+        runtime.controller.start.side_effect = DeviceError("right failed")
+        runtime.monitor.device_infos = {"left": {"serial": "A"}}
+        runtime.monitor.launch_configuration = {}
+        coordinator = WebCaptureCoordinator(
+            Path("unused.capture.duckdb"),
+            lambda capture_id, attributes, configuration: runtime,
+            requested_devices={"left": {"Handle": "A"}, "right": {"Handle": "B"}},
+            health_log_enabled=False,
+        )
+        with self.assertRaisesRegex(DeviceError, "right failed"):
+            coordinator.start("test", {})
+        devices = coordinator.bootstrap()["devices"]
+        assert isinstance(devices, dict)
+        self.assertEqual(devices["left"]["info"], {"serial": "A"})
+        self.assertEqual(devices["right"]["requested"], {"Handle": "B"})
+        self.assertEqual(devices["right"]["info"], {})
+
     def test_startup_failure_returns_json_and_preserves_cause(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Mock()
-            runtime.monitor.device_info = {}
+            runtime.monitor.device_infos = {}
             runtime.monitor.launch_configuration = {}
 
             def fail():
