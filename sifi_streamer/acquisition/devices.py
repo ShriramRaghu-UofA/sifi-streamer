@@ -39,6 +39,9 @@ class SignalStreamSpec:
     nominal_rate_hz: float
     dtype: npt.DTypeLike = np.float32
     label: str | None = None
+    source_clock: str = "producer-defined"
+    timestamp_unit: str = "seconds"
+    timestamp_dtype: npt.DTypeLike = np.float64
 
     def __post_init__(self) -> None:
         _identifier(self.stream_id, "stream_id")
@@ -49,8 +52,20 @@ class SignalStreamSpec:
         if not np.isfinite(self.nominal_rate_hz) or self.nominal_rate_hz <= 0:
             raise ValueError("nominal_rate_hz must be finite and positive")
         dtype = np.dtype(self.dtype)
-        if dtype.hasobject or dtype.fields is not None:
-            raise ValueError("stream dtype must be a non-object scalar dtype")
+        if not (
+            (dtype.kind in "iu" and dtype.itemsize in (1, 2, 4, 8))
+            or (dtype.kind == "f" and dtype.itemsize in (4, 8))
+            or (dtype.kind == "b" and dtype.itemsize == 1)
+        ):
+            raise ValueError("stream dtype must be a boolean, integer, or float scalar")
+        clock_dtype = np.dtype(self.timestamp_dtype)
+        if not (
+            (clock_dtype.kind == "i" and clock_dtype.itemsize in (1, 2, 4, 8))
+            or (clock_dtype.kind == "f" and clock_dtype.itemsize in (4, 8))
+        ):
+            raise ValueError("timestamp dtype must be a signed integer or float scalar")
+        if not self.source_clock.strip() or not self.timestamp_unit.strip():
+            raise ValueError("source clock and timestamp unit must be non-empty")
 
     @property
     def n_channels(self) -> int:
@@ -69,10 +84,15 @@ class AcquisitionPacket(Protocol):
     def stream_id(self) -> StreamId | None: ...
 
     @property
-    def timestamps(self) -> Sequence[float]: ...
+    def timestamps(self) -> Sequence[int | float]: ...
 
     @property
     def data(self) -> Mapping[str, Sequence[float | int | None]]: ...
+
+    @property
+    def validity(self) -> Mapping[str, Sequence[bool]]:
+        """Explicit validity, independent of whether a channel value is null."""
+        ...
 
     @property
     def reported_rate_hz(self) -> float | None: ...
@@ -96,13 +116,19 @@ class AcquisitionDevice(Protocol):
 
     def disconnect(self) -> None: ...
 
+    def request_stop(self) -> None:
+        """Thread-safely unblock read_packet; disconnect runs after reading stops."""
+        ...
+
     def read_packet(self) -> AcquisitionPacket: ...
 
     @property
     def streams(self) -> tuple[SignalStreamSpec, ...]: ...
 
     @property
-    def device_info(self) -> dict[str, object] | None: ...
+    def device_info(self) -> dict[str, object]:
+        """Return complete finite JSON metadata, or an explicit empty report."""
+        ...
 
 
 type DeviceFactory = Callable[[], AcquisitionDevice]

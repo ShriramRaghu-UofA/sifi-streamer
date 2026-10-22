@@ -26,16 +26,14 @@ class HealthThresholds:
     def __post_init__(self) -> None:
         if not math.isfinite(self.window_seconds) or self.window_seconds <= 0:
             raise ValueError("window_seconds must be finite and positive")
-        for name in ("stale_after_seconds",):
-            value = getattr(self, name)
-            if value is not None and (not math.isfinite(value) or value <= 0):
-                raise ValueError(f"{name} must be finite and positive or null")
-        for name in (
-            "minimum_rate_ratio",
-            "maximum_rate_ratio",
-            "maximum_missing_fraction",
+        stale = self.stale_after_seconds
+        if stale is not None and (not math.isfinite(stale) or stale <= 0):
+            raise ValueError("stale_after_seconds must be finite and positive or null")
+        for name, value in (
+            ("minimum_rate_ratio", self.minimum_rate_ratio),
+            ("maximum_rate_ratio", self.maximum_rate_ratio),
+            ("maximum_missing_fraction", self.maximum_missing_fraction),
         ):
-            value = getattr(self, name)
             if value is not None and (not math.isfinite(value) or value < 0):
                 raise ValueError(f"{name} must be finite and non-negative or null")
         if self.maximum_lost_samples is not None and self.maximum_lost_samples < 0:
@@ -177,6 +175,7 @@ class WorkerHealthCollector:
         samples_lost: int,
         status: str,
         misaligned: bool,
+        evaluate_source_timing: bool = True,
         now: float | None = None,
     ) -> None:
         counter = self._streams[stream_id]
@@ -194,7 +193,7 @@ class WorkerHealthCollector:
                 counter.valid_value_count += bool(valid)
                 missing[index] += not valid
         counter.missing_by_channel = tuple(missing)
-        for timestamp in timestamps:
+        for timestamp in timestamps if evaluate_source_timing else ():
             if counter.last_source_timestamp is not None:
                 delta = timestamp - counter.last_source_timestamp
                 if delta > 0:

@@ -8,7 +8,7 @@ from typing import Self
 
 
 def default_health_path(capture_path: Path) -> Path:
-    suffix = ".capture.jsonl.zst"
+    suffix = ".capture.duckdb"
     name = capture_path.name
     return capture_path.with_name(
         f"{name[: -len(suffix)]}.health.jsonl"

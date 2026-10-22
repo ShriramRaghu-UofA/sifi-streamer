@@ -2,7 +2,10 @@
 
 import contextlib
 import json
+import math
+import select
 import socket
+import threading
 import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -31,8 +34,12 @@ class ModalitySpec:
     """
 
     channels: tuple[str, ...]
-    sample_rate: int
+    sample_rate: float
     dtype: npt.DTypeLike = np.float32
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.sample_rate) or self.sample_rate <= 0:
+            raise ValueError("modality sample_rate must be finite and positive")
 
     @property
     def n_channels(self) -> int:
@@ -54,6 +61,8 @@ class ModalitySpec:
             float(self.sample_rate),
             self.dtype,
             label,
+            source_clock="SiFi device timestamp",
+            timestamp_unit="seconds",
         )
 
 
@@ -66,6 +75,7 @@ class Modality(StrEnum):
     EDA = "eda"
     PPG = "ppg"
     TEMPERATURE = "temperature"
+    EMG_SINGLE = "emg"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +92,7 @@ class Modalities[T]:
         eda: Value associated with :attr:`Modality.EDA`.
         ppg: Value associated with :attr:`Modality.PPG`.
         temperature: Value associated with :attr:`Modality.TEMPERATURE`.
+        emg_single: BioPoint single-channel value for :attr:`Modality.EMG_SINGLE`.
     """
 
     emg: T | None = None
@@ -90,10 +101,27 @@ class Modalities[T]:
     eda: T | None = None
     ppg: T | None = None
     temperature: T | None = None
+    emg_single: T | None = None
 
     def get(self, modality: Modality) -> T | None:
         """Return the value for ``modality``, or ``None`` when disabled."""
-        return getattr(self, "emg" if modality is Modality.EMG else modality.value)
+        match modality:
+            case Modality.EMG:
+                return self.emg
+            case Modality.IMU:
+                return self.imu
+            case Modality.ECG:
+                return self.ecg
+            case Modality.EDA:
+                return self.eda
+            case Modality.PPG:
+                return self.ppg
+            case Modality.TEMPERATURE:
+                return self.temperature
+            case Modality.EMG_SINGLE:
+                return self.emg_single
+            case _:
+                raise ValueError(f"Unsupported modality: {modality!r}")
 
     def require(self, modality: Modality) -> T:
         """Return an enabled value.
@@ -107,9 +135,7 @@ class Modalities[T]:
 
     def with_value(self, modality: Modality, value: T) -> Modalities[T]:
         """Return a copy with ``value`` assigned to ``modality``."""
-        return replace(
-            self, **{"emg" if modality is Modality.EMG else modality.value: value}
-        )
+        return replace(self, **{_modality_field(modality): value})
 
     def enabled(self) -> Iterator[tuple[Modality, T]]:
         """Yield enabled ``(modality, value)`` pairs in enum order."""
@@ -129,13 +155,24 @@ class Modalities[T]:
         return result
 
 
+def _modality_field(modality: Modality) -> str:
+    match modality:
+        case Modality.EMG:
+            return "emg"
+        case Modality.EMG_SINGLE:
+            return "emg_single"
+        case _:
+            return modality.value
+
+
 DEFAULT_MODALITIES = Modalities(
-    emg=ModalitySpec(tuple(f"emg{i}" for i in range(8)), 1600),
+    emg=ModalitySpec(tuple(f"emg{i}" for i in range(8)), 1000),
     imu=ModalitySpec(("ax", "ay", "az", "qw", "qx", "qy", "qz"), 100),
     ecg=ModalitySpec(("ecg",), 500),
     eda=ModalitySpec(("eda",), 50),
     ppg=ModalitySpec(("ir", "r", "g", "b"), 50),
     temperature=ModalitySpec(("temperature",), 1),
+    emg_single=ModalitySpec(("emg",), 2000),
 )
 SIGNAL_MODALITIES = tuple(Modality)
 
@@ -153,7 +190,9 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
     """Derive enabled modality layouts from a bridge ``info`` document.
 
     EMG, ECG, EDA, IMU, and temperature use the bridge ``fs`` value. PPG uses
-    ``sps / avg``. Channel names come from :data:`DEFAULT_MODALITIES`.
+    ``sps / avg`` without rounding. Both current ``configuration`` and historical
+    ``device`` configuration blocks are readable. Channel names come from
+    :data:`DEFAULT_MODALITIES`.
 
     Raises:
         DeviceError: If the document shape is invalid or contains no enabled
@@ -162,17 +201,23 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
     root = info.get("info", info)
     if not isinstance(root, Mapping):
         raise DeviceError("Bridge info is invalid")
-    device = root.get("device", root)
+    device = root.get("configuration", root.get("device", root))
     if not isinstance(device, Mapping):
         raise DeviceError("Bridge device info is invalid")
     result: Modalities[ModalitySpec] = Modalities()
+    sensors = device.get("sensors", root.get("sensors"))
     for modality, name in (
-        (Modality.EMG, "emg"),
+        (
+            Modality.EMG_SINGLE if root.get("device") == "BioPoint" else Modality.EMG,
+            "emg",
+        ),
         (Modality.ECG, "ecg"),
         (Modality.EDA, "eda"),
         (Modality.IMU, "imu"),
         (Modality.TEMPERATURE, "temperature"),
     ):
+        if isinstance(sensors, Mapping) and sensors.get(name) is False:
+            continue
         values = device.get(name, {})
         if (
             isinstance(values, Mapping)
@@ -183,12 +228,13 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
                 modality,
                 ModalitySpec(
                     DEFAULT_MODALITIES.require(modality).channels,
-                    round(float(values["fs"])),
+                    float(values["fs"]),
                 ),
             )
     ppg = device.get("ppg", {})
     if (
         isinstance(ppg, Mapping)
+        and not (isinstance(sensors, Mapping) and sensors.get("ppg") is False)
         and ppg.get("enabled", True)
         and ppg.get("sps")
         and ppg.get("avg")
@@ -197,7 +243,7 @@ def modalities_from_device_info(info: Mapping[str, object]) -> Modalities[Modali
             Modality.PPG,
             ModalitySpec(
                 DEFAULT_MODALITIES.require(Modality.PPG).channels,
-                round(float(ppg["sps"]) / float(ppg["avg"])),
+                float(ppg["sps"]) / float(ppg["avg"]),
             ),
         )
     if not tuple(result.enabled()):
@@ -222,7 +268,7 @@ class SiFiPacket:
 
     packet_type: str
     timestamps: list[float]
-    data: dict[str, list[float]]
+    data: dict[str, list[float | None]]
     received_at: float
     sample_rate: float | None = None
     samples_lost: int = 0
@@ -240,7 +286,21 @@ class SiFiPacket:
     @property
     def stream_id(self) -> StreamId | None:
         """Return the generic stream identifier for known and custom packet types."""
-        return self.packet_type or None
+        return self.packet_type if self.modality is not None else None
+
+    @property
+    def validity(self) -> dict[str, list[bool]]:
+        """Map SiFi missing/non-finite values to explicit invalid measurements."""
+        return {
+            channel: [
+                value is not None
+                and isinstance(value, int | float)
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                for value in values
+            ]
+            for channel, values in self.data.items()
+        }
 
     @property
     def reported_rate_hz(self) -> float | None:
@@ -297,6 +357,36 @@ class _BinaryLineReader(Protocol):
         ...
 
 
+class _SocketLineReader:
+    """Read TCP lines with bounded waits so local shutdown wakes on Windows."""
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._socket = sock
+        self._closed = threading.Event()
+        self._buffer = bytearray()
+
+    def close(self) -> None:
+        self._closed.set()
+
+    def readline(self) -> bytes:
+        while not self._closed.is_set():
+            end = self._buffer.find(b"\n")
+            if end >= 0:
+                line = bytes(self._buffer[: end + 1])
+                del self._buffer[: end + 1]
+                return line
+            ready, _, _ = select.select([self._socket], [], [], 0.1)
+            if not ready:
+                continue
+            chunk = self._socket.recv(65536)
+            if not chunk:
+                line = bytes(self._buffer)
+                self._buffer.clear()
+                return line
+            self._buffer.extend(chunk)
+        return b""
+
+
 def packet_from_json_line(line: str | bytes) -> SiFiPacket | None:
     """Parse one bridge JSON line into a packet.
 
@@ -342,7 +432,7 @@ class SiFiBandDevice:
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
         """Return the default SiFi modality layouts."""
-        return DEFAULT_MODALITIES
+        return replace(DEFAULT_MODALITIES, emg_single=None)
 
     @property
     def streams(self) -> tuple[SignalStreamSpec, ...]:
@@ -350,9 +440,9 @@ class SiFiBandDevice:
         return streams_from_modalities(self.modalities)
 
     @property
-    def device_info(self) -> None:
-        """Return ``None`` because the raw TCP stream has no info handshake."""
-        return None
+    def device_info(self) -> dict[str, object]:
+        """Return an empty report because the TCP stream has no info handshake."""
+        return {}
 
     def connect(self) -> None:
         """Connect to the configured TCP endpoint; repeated calls are no-ops."""
@@ -360,7 +450,7 @@ class SiFiBandDevice:
             return
         try:
             self._sock = socket.create_connection((self._host, self._port))
-            self._file = self._sock.makefile("rb")
+            self._file = _SocketLineReader(self._sock)
         except OSError as exc:
             raise DeviceError(
                 f"SiFiBandDevice: cannot connect to {self._host}:{self._port}: {exc}"
@@ -368,12 +458,23 @@ class SiFiBandDevice:
 
     def disconnect(self) -> None:
         """Close the socket and file wrapper; repeated calls are safe."""
-        for resource in (self._file, self._sock):
+        reader, sock = self._file, self._sock
+        self._file = self._sock = None
+        if isinstance(reader, _SocketLineReader):
+            reader.close()
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+        for resource in (reader, sock):
             if resource is not None:
                 with contextlib.suppress(OSError):
                     resource.close()
-        self._file = None
-        self._sock = None
+
+    def request_stop(self) -> None:
+        """Wake a pending socket read; final resource cleanup follows."""
+        reader = self._file
+        if isinstance(reader, _SocketLineReader):
+            reader.close()
 
     def read_packet(self) -> SiFiPacket:
         """Return the next decodable packet, skipping malformed lines.
@@ -381,12 +482,13 @@ class SiFiBandDevice:
         Raises:
             DeviceError: If called before connection or the socket fails/closes.
         """
-        if self._file is None:
+        reader = self._file
+        if reader is None:
             raise DeviceError("SiFiBandDevice.read_packet() called before connect()")
         while True:
             try:
-                line = self._file.readline()
-            except OSError as exc:
+                line = reader.readline()
+            except (OSError, ValueError) as exc:
                 raise DeviceError(f"SiFiBandDevice: TCP receive failed: {exc}") from exc
             if not line:
                 raise DeviceError("SiFiBandDevice: TCP connection closed by remote")
@@ -405,7 +507,7 @@ class SyntheticSiFiDevice:
         amplitude: Peak amplitude of generated channel sinusoids.
     """
 
-    def __init__(self, emg_sample_rate: int = 1600, amplitude: float = 100.0) -> None:
+    def __init__(self, emg_sample_rate: int = 1000, amplitude: float = 100.0) -> None:
         if emg_sample_rate <= 0:
             raise ValueError("emg_sample_rate must be positive")
         self._rate, self._amplitude, self._t, self._connected = (
@@ -414,11 +516,12 @@ class SyntheticSiFiDevice:
             0.0,
             False,
         )
+        self._stop = threading.Event()
 
     @property
     def modalities(self) -> Modalities[ModalitySpec]:
         """Return default layouts with the configured EMG sample rate."""
-        return DEFAULT_MODALITIES.with_value(
+        return replace(DEFAULT_MODALITIES, emg_single=None).with_value(
             Modality.EMG,
             ModalitySpec(DEFAULT_MODALITIES.require(Modality.EMG).channels, self._rate),
         )
@@ -429,17 +532,23 @@ class SyntheticSiFiDevice:
         return streams_from_modalities(self.modalities)
 
     @property
-    def device_info(self) -> None:
-        """Return ``None`` because no physical-device metadata exists."""
-        return None
+    def device_info(self) -> dict[str, object]:
+        """Return an empty report because no physical-device metadata exists."""
+        return {}
 
     def connect(self) -> None:
         """Reset generated time to zero and enable packet reads."""
         self._t, self._connected = 0.0, True
+        self._stop.clear()
 
     def disconnect(self) -> None:
         """Disable packet reads."""
         self._connected = False
+        self._stop.set()
+
+    def request_stop(self) -> None:
+        """Wake the generated sample wait."""
+        self._stop.set()
 
     def read_packet(self) -> SiFiPacket:
         """Wait one sample interval and return the next EMG packet.
@@ -451,7 +560,8 @@ class SyntheticSiFiDevice:
             raise DeviceError(
                 "SyntheticSiFiDevice.read_packet() called before connect()"
             )
-        time.sleep(1 / self._rate)
+        if self._stop.wait(1 / self._rate):
+            raise DeviceError("synthetic acquisition stopped")
         self._t += 1 / self._rate
         values = (
             self._amplitude * np.sin(2 * np.pi * np.linspace(5, 40, 8) * self._t)

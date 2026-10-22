@@ -36,8 +36,8 @@ CaptureController -> CaptureBackend protocol -> AcquisitionCaptureBackend
   `CaptureBackend`.
 - Do not add device-specific controller subclasses, task controller
   subclasses, or inheritance hierarchies for application concepts.
-- `AcquisitionCaptureBackend` owns one entered `BackgroundHandle` and its
-  capture. It does not inherit from `CaptureController`.
+- `AcquisitionCaptureBackend` owns one coordinator `BackgroundHandle`, its
+  device workers, and recorder. It does not inherit from `CaptureController`.
 - Device integrations satisfy structural `AcquisitionDevice` and
   `AcquisitionPacket` protocols without inheritance or registration. Keep
   composition and dependency injection as the extension mechanism.
@@ -56,7 +56,7 @@ CaptureController -> CaptureBackend protocol -> AcquisitionCaptureBackend
 Package behavior understands only:
 
 - a capture/session;
-- raw packets;
+- raw packets, launch configuration, device reports, and diagnostics;
 - segments representing durations;
 - markers representing point facts;
 - IDs, kinds, reasons, timestamps, and scalar attributes.
@@ -87,8 +87,8 @@ cross-process boundaries. Never use mutable default arguments.
 - Reject markers and segments before controller startup.
 - Reject duplicate active segment IDs.
 - Stop nested segments in reverse start order.
-- On controller close, close every open segment in reverse order before
-  stopping the backend.
+- On controller close, finish device producers, then close every open segment
+  in reverse order before finalizing the recorder.
 - Use `completed` for automatically closed segments after normal completion
   and `aborted` after a controlled abnormal exit.
 - Stop the backend exactly once.
@@ -105,16 +105,14 @@ cross-process boundaries. Never use mutable default arguments.
 
 ## Capture format compatibility
 
-`*.capture.jsonl.zst` is authoritative and append-only.
+`*.capture.duckdb` is authoritative. Its event history is append-only.
 
-- Preserve schema version 2 record names, fields, and meanings unless a schema
-  correction is explicitly approved and documented with compatibility tests.
+- Current database schema is version 1. Pre-v1 breaking changes are permitted
+  when explicitly requested and documented with regression tests.
 - Never rewrite an existing capture. Writers use exclusive creation.
 - Never make CSV or Parquet authoritative.
-- Readers must decode existing compatible captures from both source projects.
-- Existing readers must decode newly written compatible captures.
-- Preserve lifecycle validation, sequence validation, finite JSON values, and
-  newline-terminated JSONL records.
+- Preserve lifecycle validation, producer/global sequence validation, finite
+  JSON values, and atomic event/body/sample transactions.
 - Preserve complete raw packet documents, including unknown device fields.
 - Accept unknown fields on known record types for forward compatibility.
 - Do not silently accept unknown record types or unsupported schema versions.
@@ -122,14 +120,13 @@ cross-process boundaries. Never use mutable default arguments.
   IPC message, recorder, and wire record.
 - Keep optional timestamp/source-clock fields generic. Do not invent
   application-specific timestamp attribute names.
-- Heavy conversion dependencies such as pandas and PyArrow must remain behind
-  the `parquet` optional dependency. Acquisition and capture must not require
-  them.
+- DuckDB provides capture and derived Parquet/CSV export. Acquisition, capture,
+  and export must not require pandas or PyArrow.
 
 ## SiFi and bridge behavior
 
 - The managed bridge must configure an explicit EMG sample rate. The default
-  is 1600 Hz; supported values are 500, 1000, 1600, and 2000 Hz.
+  is 1000 Hz; supported values are 500, 1000, 1600, and 2000 Hz.
 - Bridge downloads must remain an explicitly invoked user operation through
   `uv run sifi-download-bridge`. Never download or update a bridge during
   package installation, import, capture creation, or device startup.
@@ -156,8 +153,8 @@ cross-process boundaries. Never use mutable default arguments.
 - Use a new Windows process group or POSIX session for the bridge so foreground
   Ctrl+C can produce an orderly command-driven shutdown.
 - The background handle owns its process and readers only while entered.
-- The worker owns the device, shared-memory blocks, ring buffers, acquisition
-  thread, and recorder.
+- Each device worker owns its device, shared-memory blocks, ring buffers, and
+  polling thread. The coordinator owns workers and a separate recorder process.
 - A ring write larger than its capacity retains the newest samples.
 - Keep dependency injection available for devices, clocks, handles, and I/O so
   tests do not require hardware.
@@ -237,7 +234,7 @@ coverage for:
 - supported and invalid EMG rates;
 - interactive parsing and CLI mode conflicts;
 - controlled Ctrl+C shutdown where practical;
-- old-reader/new-writer and representative old-wire/new-reader compatibility.
+- provenance payload preservation, staged reports, and failure diagnostics.
 
 Before handoff, run:
 
@@ -266,9 +263,7 @@ confirm:
   consumer repository on `sys.path`;
 - `sifi-capture --help` succeeds;
 - a short synthetic capture can be written and read back;
-- representative compatible captures decode without mutation;
-- unchanged readers from both source repositories can read new captures when
-  those repositories are available locally.
+- representative current-schema captures decode without mutation.
 
 ## Documentation and migration
 

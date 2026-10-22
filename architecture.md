@@ -1,104 +1,66 @@
 # Architecture
 
 ```text
-consumer functions
-       |
-CaptureController -> CaptureBackend protocol -> AcquisitionCaptureBackend
-                                                |
-                                         BackgroundHandle
-                                                |
-                 generic worker + shared memory + CaptureLogWriter
-                                                |
-                                      AcquisitionDevice protocol
-                                         /                \
-                                  MyoDevice          SiFiBridgeDevice
+CaptureController -> CaptureBackend -> AcquisitionCaptureBackend
+                                              |
+                                      coordinator handle
+                                  /           |           \
+                           device A        device B     annotations
+                                  \           |           /
+                                  bounded producer transport
+                                              |
+                                      recorder process
+                                              |
+                                    capture DuckDB database
+
+device workers -> shared-memory rings -> live monitor -> web/consumer
 ```
 
-The source tree makes those boundaries explicit: `capture` owns authoritative
-records and lifecycle, `acquisition` owns the pluggable device boundary and
-process machinery, `sifi` supplies one concrete integration, and `web` supplies
-a monitored launcher. Dependencies point from integrations toward the generic
-layers; `capture` and `acquisition` never import `sifi` or `web`.
+`capture` owns authoritative storage, recording transport, controller lifecycle,
+and runners. `acquisition` owns generic device protocols, coordination, workers,
+and live buffers. `sifi` supplies concrete devices and managed bridge composition;
+`web` supplies a local monitored launcher. Generic capture and acquisition never
+import integration namespaces. Runtime acquisition does not require pandas or
+PyArrow.
 
-`CaptureController` knows only captures, segments, markers, IDs, kinds,
-reasons, and scalar attributes. It validates lifecycle, tracks arbitrary nested
-segments, closes them in reverse order, and stops its backend exactly once. It
-does not know trials, presentations, participants, stimuli, responses, tasks,
-suites, or application artifact layouts. `NoCaptureController` provides the
-same generic surface for deliberate no-hardware operation.
+The coordinator owns one recorder and one process per device. Factories are
+explicitly injected and picklable. Workers own devices, polling threads, and
+shared-memory rings. `request_stop()` unblocks reads; `disconnect()` completes
+teardown. Console Ctrl+C belongs to the foreground launcher; children ignore it
+and the bridge runs in its own process group/session.
 
-`CaptureBackend` is structural. `AcquisitionCaptureBackend` satisfies it by
-owning exactly one entered `BackgroundHandle`; it is not a controller subclass.
-The handle owns the spawned worker and shared-memory readers. The worker owns
-the injected device, ring buffers, and recorder. The recorder serializes
-packets and annotations. SiFi composition supplies a `SiFiBridgeDevice` factory
-to this same generic backend rather than defining a device-specific subclass.
+The recorder creates and commits metadata before hardware connection. Devices
+report complete finite JSON and declare their fixed layouts after connection.
+All layouts register before a shared acquisition gate opens. Undeclared streams,
+shape changes, and unhandled exceptions fail the entire capture. Source clocks
+are descriptive producer-owned text with declared units and timestamp dtypes.
+The package does not infer clock synchronization.
 
-Live acquisition uses an ordered registry of string stream IDs declared once
-after an injected device connects. Each `SignalStreamSpec` fixes its channels,
-nominal rate, dtype, and optional display metadata. Each packet contributes to
-at most one stream and may independently provide one raw capture document.
-Shared-memory rings retain timestamps, native values, explicit validity, and
-an absolute cursor.
+Each submission carries producer identity, local sequence, and host monotonic/Unix
+receipt clocks assigned before transport. The recorder assigns global acceptance
+order. Each packet may contain many samples and an optional complete raw document.
+Samples share event identity plus a sample index. Nullness and validity remain
+independent; authoritative recording precedes lossy display conversion.
 
-`Modality`, `Modalities`, and `SiFiPacket` are contained in the `sifi`
-integration. Generic acquisition consumes only `AcquisitionDevice`,
-`AcquisitionPacket`, and fixed `SignalStreamSpec` declarations. Stream addition
-or removal after startup remains out of scope because live layouts are fixed
-for a capture.
+Only the recorder writes DuckDB. Events and their body/sample rows commit
+atomically. Dynamic metadata and raw documents use VARIANT; modeled columns are
+typed. Acceptance is not durability. An independent timer commits pending data,
+with an additional batch-size trigger. Bounded budgets include transport backlog.
+Deadlines and overload are failures; there are no silent drops or automatic retries.
 
-Managed SiFi startup consumes one complete immutable `SiFiSensorProfile`.
-It sends every ECG, EMG, EDA, PPG, IMU, and temperature option on every
-connection—even for disabled sensors—then sends the complete sensor enabled
-state last. The subsequent bridge `info` response must agree with enabled
-states and rates before the fixed stream registry is published. PPG declares
-raw `sps` and averaging separately; its stream rate is `sps / avg`.
+Shutdown rejects external commands, finishes device producers, drains accepted
+data, closes open segments in reverse order, writes a terminal event, and commits.
+Queue emptiness is not producer completion. Any unhandled device/transport/storage
+failure initiates capture-wide cleanup; timeouts never become successful drains.
 
-The authoritative artifact is an append-only `*.capture.jsonl.zst`.
-`CaptureLogWriter` exclusively creates schema-v2 JSONL in concatenated
-Zstandard frames. Raw packet documents retain all JSON fields. Readers accept
-unknown fields while validating record version, sequence, capture lifecycle,
-segment lifecycle, JSON finiteness, and scalar annotations. A crashed,
-unterminated log remains readable; readers never mutate it.
+One `.capture.duckdb` database represents one capture. There is no legacy storage
+reader or migration. Read-only SQL and discovery helpers expose events, catalogs,
+samples, and derived segment/status views. Parquet and CSV are derived exports.
+Preserve the WAL beside an abruptly terminated database. Explicit recovery creates
+a new recovered artifact; ordinary readers never silently repair originals.
 
-When a connected acquisition device supplies a startup information document,
-the recorder writes that complete document as the first `raw_packet` after
-`capture_started`. For SiFi hardware this preserves the bridge `info` response,
-including firmware, configuration, and reported sample rates, in the
-authoritative artifact without changing schema v2.
+Live rings and health are separate from persistence. Their recent-window retention
+and display conversion must not affect authoritative samples. Optional health JSONL
+sidecars remain non-authoritative.
 
-Optional SiFi table extraction is a derived, non-authoritative boundary.
-`sifi_streamer.sifi.export` validates known SiFi packet layouts and exposes
-capture, stream, marker, segment, and per-modality pandas tables. Capture
-sequence and the recorded clocks are preserved so consumers can join tables
-without the package interpreting marker or segment kinds. Parquet datasets are
-published only as a convenience representation; cognitive labeling, attempt
-selection, supersession, and other application policies remain downstream.
-
-## Ownership rule
-
-> Only the launcher or component that starts a capture closes it. Code
-> receiving an already-started controller may annotate it but does not close
-> it.
-
-Launchers should use `runner.py`; application functions should receive a
-started controller and manage only their own segments.
-
-The local web launcher's Python coordinator owns one controller. Browser tabs
-send commands and display immutable state; closing a tab does not stop capture.
-
-## Observability
-
-The worker publishes cumulative health separately from command acknowledgements.
-A lossy latest-value queue feeds rate and missingness display, while a reliable
-fatal queue reports acquisition or recorder failure. Warnings do not alter
-authoritative data. Optional `*.health.jsonl` files are non-authoritative.
-
-## Vendor bridge installation
-
-Bridge installation is deliberately outside capture startup. The user invokes
-`sifi-download-bridge`, which selects the host asset, downloads with `urllib`,
-verifies SHA-256, extracts only the expected executable, and writes a provenance
-manifest. The default release is maintainer-tested; `--latest` is an explicit,
-fail-closed opt-in, and `--tag TAG` selects a specific release through the same
-verified metadata path. Capture code only consumes an executable path.
+See [persistence-design.md](persistence-design.md) and [api.md](api.md).

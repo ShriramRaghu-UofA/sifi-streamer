@@ -12,5 +12,5 @@
     "target": "ES2022",
     "module": "ESNext"
   },
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte"]
+  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts", "*.ts"]
 }

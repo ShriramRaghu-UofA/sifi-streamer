@@ -7,8 +7,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from sifi_streamer.acquisition.health import HealthThresholds
+from sifi_streamer.capture.records import Packet, Scalar
 from sifi_streamer.capture.runners import parse_attributes
 from sifi_streamer.sifi.bridge import DEFAULT_BRIDGE_EXECUTABLE, BridgeTransport
+from sifi_streamer.sifi.cli.device_options import add_device_arguments, resolve_devices
 from sifi_streamer.sifi.cli.sensor_options import (
     add_sensor_arguments,
     resolve_sensor_profile,
@@ -18,6 +20,24 @@ from sifi_streamer.sifi.cli.sensor_options import (
 from sifi_streamer.sifi.composition import create_sifi_capture_runtime
 from sifi_streamer.web.annotations import AnnotationKindDefinition
 from sifi_streamer.web.coordinator import _kind, serve_capture_web
+
+
+def sifi_device_summary(document: Packet) -> dict[str, Scalar]:
+    """Extract display fields while leaving the authoritative report untouched."""
+    info = document.get("info", {})
+    if not isinstance(info, dict):
+        return {}
+    return {
+        label: value
+        for key, label in (
+            ("device", "Model"),
+            ("name", "Name"),
+            ("mac", "MAC address"),
+            ("id", "Device ID"),
+            ("firmware_version", "Firmware"),
+        )
+        if isinstance(value := info.get(key), str)
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,10 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bridge-executable", type=Path, default=DEFAULT_BRIDGE_EXECUTABLE
     )
+    add_device_arguments(parser)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument(
-        "--transport", choices=tuple(BridgeTransport), default=BridgeTransport.TCP
+        "--transport",
+        choices=tuple(BridgeTransport),
+        default=BridgeTransport.STDOUT,
+        help="Bridge data transport (default: stdout); host/port apply to TCP or UDP",
     )
     add_sensor_arguments(parser)
     parser.add_argument("--synthetic", action="store_true")
@@ -46,7 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--maximum-lost-samples", type=int, default=0)
     parser.add_argument("--no-health-log", action="store_true")
     parser.add_argument("--no-open", action="store_true")
-    parser.add_argument("--web-port", type=int, default=0)
+    parser.add_argument(
+        "--web-port",
+        type=int,
+        default=0,
+        help="Dashboard HTTP port (default: automatic); separate from --port",
+    )
     return parser
 
 
@@ -68,9 +97,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.output.exists():
         parser.error(f"output already exists: {args.output}")
+    if args.synthetic and (args.device_handle is not None or args.device is not None):
+        parser.error("--device and --device-handle cannot be used with --synthetic")
     if args.synthetic and sensor_options_used(args):
         parser.error("sensor profile options cannot be used with --synthetic")
     try:
+        device_handles = resolve_devices(args.device)
         thresholds = HealthThresholds(
             args.health_window,
             args.stale_after,
@@ -85,18 +117,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
 
-    def factory(capture_id: str, capture_attributes):
+    def factory(capture_id: str, capture_attributes, launch_configuration):
         return create_sifi_capture_runtime(
             args.output,
             capture_id,
             capture_attributes,
             bridge_executable=args.bridge_executable,
+            device_handle=args.device_handle,
+            device_handles=device_handles,
             host=args.host,
             port=args.port,
             transport=args.transport,
             sensor_profile=sensor_profile,
             synthetic=args.synthetic,
             thresholds=thresholds,
+            launch_configuration=launch_configuration,
         )
 
     configuration_summary = {
@@ -105,13 +140,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         "host": args.host,
         "port": args.port,
         "transport": str(args.transport),
+        "device_handle": args.device_handle,
     }
+    if device_handles is not None:
+        configuration_summary["devices"] = ", ".join(
+            f"{name}={handle}" for name, handle in device_handles.items()
+        )
     if sensor_profile is not None:
         configuration_summary.update(sensor_profile_summary(sensor_profile))
+    selections = device_handles or {"device": args.device_handle}
+    requested_devices: dict[str, dict[str, Scalar]] = {}
+    for index, (name, handle) in enumerate(selections.items()):
+        settings: dict[str, Scalar] = {
+            "Handle": "Synthetic device"
+            if args.synthetic
+            else handle or "Automatic selection",
+            "Transport": str(args.transport),
+        }
+        if not args.synthetic and args.transport != BridgeTransport.STDOUT:
+            settings.update({"Host": args.host, "Port": args.port + index})
+        requested_devices[name] = settings
     serve_capture_web(
         args.output,
         factory,
         configuration_summary=configuration_summary,
+        requested_devices=requested_devices,
+        device_info_formatter=sifi_device_summary,
         default_capture_id=args.capture_id,
         default_attributes=attributes,
         thresholds=thresholds,

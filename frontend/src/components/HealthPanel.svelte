@@ -1,0 +1,263 @@
+<script lang="ts">
+  import { Accordion } from '@skeletonlabs/skeleton-svelte';
+  import { SlidersHorizontal, ChevronDown, CircleCheck, TriangleAlert, Save } from '@lucide/svelte';
+  import type { Dashboard } from '../lib/dashboard.svelte.js';
+  import type { Thresholds } from '../lib/types';
+  import { formatRate, title, thresholdsValid } from '../lib/types';
+  let { dashboard } = $props<{ dashboard: Dashboard }>();
+  const rules: { key: keyof Thresholds; label: string; hint: string; step: string; min: number }[] =
+    [
+      {
+        key: 'window_seconds',
+        label: 'Evaluation window (s)',
+        hint: 'Duration used to estimate live rates.',
+        step: '0.1',
+        min: 0.1,
+      },
+      {
+        key: 'stale_after_seconds',
+        label: 'Stale after (s)',
+        hint: 'Warn if no packet arrives in this time.',
+        step: '0.1',
+        min: 0.1,
+      },
+      {
+        key: 'minimum_rate_ratio',
+        label: 'Minimum rate ratio',
+        hint: '0.9 means 90% of the configured rate.',
+        step: '0.01',
+        min: 0,
+      },
+      {
+        key: 'maximum_rate_ratio',
+        label: 'Maximum rate ratio',
+        hint: '1.1 means 110% of the configured rate.',
+        step: '0.01',
+        min: 0,
+      },
+      {
+        key: 'maximum_missing_fraction',
+        label: 'Maximum missing fraction',
+        hint: '0.01 allows 1% missing values.',
+        step: '0.01',
+        min: 0,
+      },
+      {
+        key: 'maximum_lost_samples',
+        label: 'Maximum lost samples',
+        hint: 'Vendor-reported sample loss per window.',
+        step: '1',
+        min: 0,
+      },
+    ];
+  let health = $derived(dashboard.live?.health);
+  let rulesValid = $derived(thresholdsValid(dashboard.thresholds));
+  function setRule(key: keyof Thresholds, text: string) {
+    const value = text === '' ? null : Number(text);
+    if (key === 'window_seconds') dashboard.thresholds.window_seconds = value ?? 0;
+    else dashboard.thresholds[key] = value;
+  }
+  function save(event: SubmitEvent) {
+    event.preventDefault();
+    if (rulesValid)
+      void dashboard.command('/api/thresholds', dashboard.thresholds, 'Health rules saved');
+  }
+</script>
+
+<section class="space-y-6">
+  {#if dashboard.live?.recorder}
+    {@const recorder = dashboard.live.recorder}
+    <section class="panel space-y-3" aria-label="Recording progress">
+      <h3 class="font-semibold">Recording progress</h3>
+      <dl class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+        <div>
+          <dt class="muted">Accepted events</dt>
+          <dd>{recorder.accepted_events}</dd>
+        </div>
+        <div>
+          <dt class="muted">Committed events</dt>
+          <dd>{recorder.committed_events}</dd>
+        </div>
+        <div>
+          <dt class="muted">Uncommitted bytes</dt>
+          <dd>{recorder.pending_bytes}</dd>
+        </div>
+        <div>
+          <dt class="muted">Oldest uncommitted</dt>
+          <dd>{recorder.oldest_uncommitted_age_s.toFixed(2)} s</dd>
+        </div>
+      </dl>
+      <p class="muted text-sm">
+        Accepted events may still be buffered. Closing a capture waits for its final commit.
+      </p>
+    </section>
+  {/if}
+  <div>
+    <p class="eyebrow">Quality at a glance</p>
+    <h2 class="h3 mt-2">Signal health</h2>
+    <dl
+      class="mt-4 divide-y divide-surface-200-800 rounded-container bg-surface-200-800/40 px-4 text-sm"
+    >
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Configured</dt>
+        <dd class="muted leading-relaxed">The profile rate confirmed by the bridge.</dd>
+      </div>
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Packet-reported</dt>
+        <dd class="muted leading-relaxed">The latest sample rate supplied in packet JSON.</dd>
+      </div>
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Received rate (window estimate)</dt>
+        <dd class="muted leading-relaxed">
+          Incoming sample rows counted using our host clock over a rolling
+          {dashboard.live?.thresholds.window_seconds ??
+            dashboard.bootstrap?.thresholds.window_seconds} s evaluation window (shorter during startup).
+        </dd>
+      </div>
+      <div class="grid gap-1 py-3 sm:grid-cols-[16rem_1fr] sm:gap-6">
+        <dt class="font-semibold">Packet timestamp-derived rate</dt>
+        <dd class="muted leading-relaxed">
+          Calculated from the spacing of sample timestamps supplied in packets. These timestamps
+          come from the source, rather than being assigned by our host.
+        </dd>
+      </div>
+    </dl>
+  </div>
+  <section class="panel space-y-4">
+    <h3 class="font-semibold">Stream diagnostics</h3>
+    {#if !health}<p class="muted text-sm">Diagnostics appear once capture starts.</p>{:else}
+      <div class="overflow-x-auto">
+        <table class="table whitespace-nowrap">
+          <thead
+            ><tr
+              ><th>Stream</th><th>Health</th><th>Configured</th><th>Packet-reported</th><th
+                >Received rate (window estimate)</th
+              ><th>Packet timestamp-derived rate</th><th>Missing</th><th>Lost</th><th>Packets</th
+              ></tr
+            ></thead
+          ><tbody
+            >{#each health.streams as stream (stream.stream_id)}<tr
+                ><td class="font-medium">{title(stream.stream_id)}</td><td
+                  ><span
+                    class={[
+                      'badge',
+                      stream.severity === 'healthy'
+                        ? 'preset-tonal-success'
+                        : 'preset-tonal-warning',
+                    ]}>{title(stream.severity)}</span
+                  ></td
+                ><td>{formatRate(stream.nominal_rate_hz)}</td><td
+                  >{formatRate(stream.reported_rate_hz)}</td
+                ><td>{formatRate(stream.observed_rate_hz)}</td><td
+                  >{formatRate(stream.source_rate_hz)}</td
+                ><td>{(stream.missing_fraction * 100).toFixed(2)}%</td><td>{stream.lost_samples}</td
+                ><td>{stream.packet_count}</td></tr
+              >{/each}</tbody
+          >
+        </table>
+      </div>
+      <Accordion multiple collapsible
+        >{#each health.streams as stream (stream.stream_id)}<Accordion.Item value={stream.stream_id}
+            ><Accordion.ItemTrigger
+              ><span>{title(stream.stream_id)} / counters & warnings</span><Accordion.ItemIndicator
+                ><ChevronDown size={16} /></Accordion.ItemIndicator
+              ></Accordion.ItemTrigger
+            ><Accordion.ItemContent
+              ><div class="py-3 space-y-3">
+                <div class="flex flex-wrap gap-2">
+                  {#each stream.warnings as warning (warning)}<span
+                      class="badge preset-tonal-warning">{title(warning)}</span
+                    >{:else}<span class="badge preset-tonal-success">No active warnings</span
+                    >{/each}
+                </div>
+                <dl class="grid gap-3 text-sm sm:grid-cols-3">
+                  <div>
+                    <dt class="muted">Samples</dt>
+                    <dd>{stream.sample_count}</dd>
+                  </div>
+                  <div>
+                    <dt class="muted">Last packet age</dt>
+                    <dd>
+                      {stream.last_packet_age_seconds == null
+                        ? '—'
+                        : `${stream.last_packet_age_seconds.toFixed(2)} s`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt class="muted">Non-OK packets</dt>
+                    <dd>{stream.non_ok_packets}</dd>
+                  </div>
+                  <div>
+                    <dt class="muted">Malformed / misaligned</dt>
+                    <dd>{stream.malformed_packets} / {stream.misaligned_packets}</dd>
+                  </div>
+                  <div>
+                    <dt class="muted">Timestamp errors</dt>
+                    <dd>{stream.timestamp_errors}</dd>
+                  </div>
+                  <div>
+                    <dt class="muted">Missing by channel</dt>
+                    <dd>{stream.missing_by_channel.join(', ') || '—'}</dd>
+                  </div>
+                </dl>
+              </div></Accordion.ItemContent
+            ></Accordion.Item
+          >{/each}</Accordion
+      >
+    {/if}
+  </section>
+  <div class="grid gap-6 lg:grid-cols-2">
+    <section class="panel">
+      <h3 class="font-semibold flex items-center gap-2">
+        <SlidersHorizontal size={18} />Health rules
+      </h3>
+      <p class="field-hint mt-2">
+        Change during capture. Leave an optional rule blank to disable it.
+      </p>
+      <form class="mt-5 space-y-5" onsubmit={save}>
+        <div class="grid gap-4 sm:grid-cols-2">
+          {#each rules as rule (rule.key)}<label class="field"
+              ><span>{rule.label}</span><input
+                class="input"
+                type="number"
+                min={rule.min}
+                step={rule.step}
+                value={dashboard.thresholds[rule.key] ?? ''}
+                required={rule.key === 'window_seconds'}
+                oninput={(event) => setRule(rule.key, event.currentTarget.value)}
+              /><span class="field-hint">{rule.hint}</span></label
+            >{/each}
+        </div>
+        {#if !rulesValid}<p class="text-error-700-300 text-sm" role="alert">
+            Use positive durations, nonnegative ratios, and a whole-number lost-sample count.
+          </p>{/if}<button
+          class="btn preset-filled-primary-500"
+          type="submit"
+          disabled={!rulesValid || dashboard.busy || dashboard.closed}
+          ><Save size={16} />Save health rules</button
+        >
+      </form>
+    </section>
+    <section class="panel">
+      <h3 class="font-semibold">Health transitions</h3>
+      <p class="field-hint mt-2">Latest warnings and recoveries, newest first.</p>
+      <ul class="mt-5 max-h-[34rem] overflow-y-auto divide-y divide-surface-200-800">
+        {#each [...(dashboard.live?.events ?? [])]
+          .slice(-50)
+          .reverse() as event (event.sequence)}<li class="flex gap-3 py-4">
+            {#if event.active}<TriangleAlert
+                size={17}
+                class="mt-0.5 shrink-0 text-warning-700-300"
+              />{:else}<CircleCheck size={17} class="mt-0.5 shrink-0 text-success-700-300" />{/if}
+            <div>
+              <p class="text-sm">{event.message}</p>
+              <p class="field-hint mt-1">
+                {event.stream_id ?? 'Acquisition'} · {event.active ? 'Warning' : 'Recovered'} · event
+                {event.sequence}
+              </p>
+            </div>
+          </li>{:else}<li class="muted text-sm py-5">No health transitions yet.</li>{/each}
+      </ul>
+    </section>
+  </div>
+</section>

@@ -45,7 +45,14 @@ jobs:
         run: |
           npm ci
           npm run check
+          npm run format:check
           npm run build
+
+      - name: Browser tests
+        working-directory: frontend
+        run: |
+          npx playwright install --with-deps chromium
+          npm test
 
       - name: Ruff
         run: uv run ruff check .

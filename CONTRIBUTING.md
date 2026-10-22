@@ -17,8 +17,8 @@ uv sync --locked --dev
 ```
 
 Add Python dependencies with `uv add`; do not edit `uv.lock` manually. Keep
-runtime dependencies minimal. Heavy conversion packages belong behind the
-existing `parquet` extra.
+runtime dependencies minimal. DuckDB provides capture and derived Parquet/CSV
+export directly; acquisition and export do not require pandas or PyArrow.
 
 Run Python validation with:
 
@@ -44,7 +44,10 @@ Install exactly the locked frontend dependencies and validate the source:
 Push-Location frontend
 npm ci
 npm run check
+npm run format:check
 npm run build
+npx playwright install chromium
+npm test
 Pop-Location
 ```
 
@@ -56,6 +59,11 @@ Do not hand-edit generated files in `sifi_streamer/web/assets`.
 When changing a `.svelte` file, follow the repository's Svelte skill guidance
 and keep the Svelte checker clean. Rebuilding is required even when a source
 change appears to affect only styling.
+
+The browser suite includes the bundled dashboard against a real Python
+synthetic acquisition and capture readback. `uv` must be on PATH, or specify
+its executable in `UV_EXE`. See [frontend/README.md](frontend/README.md) for
+live development and component guidance.
 
 ## Full release check
 
@@ -70,7 +78,8 @@ uv build
 Install the wheel into a clean Python 3.14 environment and confirm that:
 
 - `import sifi_streamer` resolves from the installed wheel;
-- `sifi-capture --help` and `sifi-capture-web --help` succeed;
+- `sifi-capture --help`, `sifi-capture-web --help`, and `sifi-capture-export --help`
+  succeed;
 - the packaged dashboard assets are present;
 - a short synthetic capture can be written and read back.
 
@@ -81,8 +90,8 @@ Node modules.
 ## Commits and compatibility
 
 Add regression coverage for meaningful behavior changes. Preserve the
-authoritative append-only schema-v2 capture format unless a schema correction
-is explicitly approved and documented. Keep application-specific vocabulary
+authoritative DuckDB capture schema unless a change is explicitly approved and
+documented. Keep application-specific vocabulary
 and artifact policy in consumer repositories.
 
 Do not create commits unless the task explicitly requests one. Release tags

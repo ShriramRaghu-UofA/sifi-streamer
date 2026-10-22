@@ -1,77 +1,93 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import uPlot from 'uplot';
   import 'uplot/dist/uPlot.min.css';
-
-  type StreamInfo = {
-    stream_id: string;
-    label: string | null;
-    channels: string[];
-    channel_labels: (string | null)[];
-    nominal_rate_hz: number;
-  };
-
-  let { stream, timestamps, samples } = $props<{
-    stream: StreamInfo;
+  import type { Stream } from './lib/types';
+  let {
+    stream,
+    timestamps,
+    samples,
+    appearance,
+  }: {
+    stream: Stream;
     timestamps: number[];
     samples: (number | null)[][];
-  }>();
-  let plot: uPlot | null = null;
-  let width = $state(800);
-
-  const colors = ['#42d3ff', '#ffb454', '#b6f36b', '#ef7dff', '#ff6b7a', '#8ca8ff', '#fff176', '#68e0c2'];
-  let columns = $derived.by(() => {
-    if (timestamps.length === 0) return [[], ...stream.channels.map(() => [])] as uPlot.AlignedData;
-    const first = timestamps[0];
-    const monotonic = timestamps.every(
-      (value: number, index: number) => index === 0 || value > timestamps[index - 1]
-    );
-    const x = monotonic
-      ? timestamps.map((value: number) => value - first)
-      : timestamps.map((_value: number, index: number) => index / stream.nominal_rate_hz);
-    return [
-      x,
-      ...stream.channels.map((_channel: string, channel: number) =>
-        samples.map((row: (number | null)[]) => row[channel] ?? null)
-      )
-    ] as uPlot.AlignedData;
-  });
-
+    appearance: string;
+  } = $props();
+  const colors = [
+    '#10b981',
+    '#3b82f6',
+    '#e879f9',
+    '#f59e0b',
+    '#f43f5e',
+    '#8b5cf6',
+    '#06b6d4',
+    '#84cc16',
+  ];
+  let ordered = $derived(
+    timestamps.every((value, index) => index === 0 || value > timestamps[index - 1]),
+  );
+  let columns = $derived([
+    ordered ? timestamps : timestamps.map((_, index) => index),
+    ...stream.channels.map((_, index) => samples.map((row) => row[index] ?? null)),
+  ] as uPlot.AlignedData);
   function attachPlot(node: HTMLDivElement) {
-    const observer = new ResizeObserver(([entry]) => {
-      width = Math.max(320, Math.floor(entry.contentRect.width));
-      plot?.setSize({ width, height: 220 });
-    });
-    observer.observe(node);
-    plot = new uPlot(
+    const spec = untrack(() => stream);
+    const stroke = () => getComputedStyle(node).color;
+    const plot = new uPlot(
       {
-        width,
-        height: 220,
-        title: stream.label ?? stream.stream_id,
+        width: Math.max(1, node.clientWidth),
+        height: 240,
         scales: { x: { time: false } },
-        axes: [{ label: 'seconds' }, {}],
+        axes: [
+          { stroke, grid: { show: false } },
+          {
+            stroke,
+            grid: { stroke: () => getComputedStyle(node).getPropertyValue('--color-surface-400') },
+          },
+        ],
         series: [
           {},
-          ...stream.channels.map((channel: string, index: number) => ({
-            label: stream.channel_labels[index] ?? channel,
+          ...spec.channels.map((channel, index) => ({
+            label: spec.channel_labels[index] ?? channel,
             stroke: colors[index % colors.length],
-            width: 1,
-            spanGaps: false
-          }))
-        ]
+            width: 1.4,
+            spanGaps: false,
+          })),
+        ],
       },
-      columns,
-      node
+      untrack(() => columns),
+      node,
     );
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width > 0)
+        plot.setSize({ width: Math.floor(entry.contentRect.width), height: 240 });
+    });
+    observer.observe(node);
+    $effect(() => {
+      plot.setData(columns);
+    });
+    $effect(() => {
+      appearance;
+      plot.redraw(true, true);
+    });
     return () => {
       observer.disconnect();
-      plot?.destroy();
-      plot = null;
+      plot.destroy();
     };
   }
-
-  $effect(() => {
-    plot?.setData(columns);
-  });
 </script>
 
-<div class="plot" {@attach attachPlot}></div>
+<div
+  class="min-w-0 overflow-hidden"
+  role="img"
+  aria-label={`${stream.label ?? stream.stream_id}: ${stream.channels.length} signal channels, ${timestamps.length} samples`}
+>
+  <div {@attach attachPlot}></div>
+</div>
+<p class="field-hint mt-2">
+  {ordered
+    ? 'Source time in seconds · latest 10 seconds'
+    : 'Sample index · source clock is not monotonic'}. Missing values appear as gaps. Use the legend
+  to toggle channels.
+</p>

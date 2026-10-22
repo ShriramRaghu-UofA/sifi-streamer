@@ -1,5 +1,6 @@
 """Reusable capture execution and terminal annotation functions."""
 
+import math
 import shlex
 import time
 from collections.abc import Callable, Sequence
@@ -135,8 +136,8 @@ def run_timed_capture(
 
     ``sleep`` is injectable so tests need not wait in real time.
     """
-    if duration_s <= 0:
-        raise ValueError("duration_s must be positive")
+    if not math.isfinite(duration_s) or duration_s <= 0:
+        raise ValueError("duration_s must be finite and positive")
     return run_capture(controller, lambda _: sleep(duration_s))
 
 

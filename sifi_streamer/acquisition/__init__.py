@@ -13,6 +13,7 @@ from sifi_streamer.acquisition.devices import (
     SignalStreamSpec,
     StreamId,
 )
+from sifi_streamer.acquisition.events import CaptureEventSource
 from sifi_streamer.acquisition.handle import BackgroundHandle
 from sifi_streamer.acquisition.health import (
     HealthEvent,
@@ -30,6 +31,7 @@ __all__ = [
     "AcquisitionMonitor",
     "AcquisitionPacket",
     "BackgroundHandle",
+    "CaptureEventSource",
     "CaptureRuntime",
     "DeviceFactory",
     "HealthEvent",

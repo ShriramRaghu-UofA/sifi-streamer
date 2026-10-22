@@ -1,54 +1,36 @@
-"""Device polling thread."""
+"""One device polling thread, with timestamps captured before queueing."""
 
-import contextlib
-import logging
 import threading
+import time
 from collections.abc import Callable
 
 from sifi_streamer.acquisition.devices import AcquisitionDevice, AcquisitionPacket
 from sifi_streamer.exceptions import DeviceError
 
-logger = logging.getLogger(__name__)
-
 
 class AcquisitionThread(threading.Thread):
-    """Poll one worker-owned device and deliver packets to a callback.
-
-    Expected device and operating-system I/O errors end the thread quietly; the
-    worker command loop remains responsible for coordinated teardown.
-
-    Args:
-        device: Connected here and disconnected when the thread exits.
-        on_packet: Callback invoked serially for every successfully read packet.
-        stop_event: Cooperative shutdown event owned by the worker process.
-    """
+    """Poll until requested to stop; every unhandled failure is retained."""
 
     def __init__(
         self,
         device: AcquisitionDevice,
-        on_packet: Callable[[AcquisitionPacket], None],
+        on_packet: Callable[[AcquisitionPacket, int, int], None],
         stop_event: threading.Event,
-        *,
-        already_connected: bool = False,
     ) -> None:
-        super().__init__(daemon=True, name="acquisition")
-        self._device, self._on_packet, self._stop = device, on_packet, stop_event
-        self._already_connected = already_connected
+        super().__init__(name="device-poll", daemon=True)
+        self._device = device
+        self._on_packet = on_packet
+        self._stop_event = stop_event
         self.failure: BaseException | None = None
 
     def run(self) -> None:
-        """Connect, poll until stopped or failed, and always disconnect."""
         try:
-            if not self._already_connected:
-                self._device.connect()
-            logger.info("Acquisition thread started")
-            while not self._stop.is_set():
-                self._on_packet(self._device.read_packet())
-        except (DeviceError, OSError, RuntimeError, TypeError, ValueError) as exc:
-            if not self._stop.is_set():
+            while not self._stop_event.is_set():
+                packet = self._device.read_packet()
+                monotonic_ns, unix_ns = time.perf_counter_ns(), time.time_ns()
+                self._on_packet(packet, monotonic_ns, unix_ns)
+        except DeviceError as exc:
+            if not self._stop_event.is_set():
                 self.failure = exc
-                logger.exception("Acquisition thread stopped unexpectedly")
-        finally:
-            with contextlib.suppress(DeviceError, OSError):
-                self._device.disconnect()
-            logger.info("Acquisition thread stopped")
+        except BaseException as exc:
+            self.failure = exc

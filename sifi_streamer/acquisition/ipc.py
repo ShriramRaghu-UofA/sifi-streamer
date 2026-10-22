@@ -1,97 +1,55 @@
-"""Typed commands and acknowledgements exchanged with the acquisition worker.
+"""Immutable device-worker declarations and lifecycle acknowledgements."""
 
-These frozen messages cross a multiprocessing queue boundary.  Attribute
-mappings are defensively copied by the sending API before a message is queued.
-"""
-
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from multiprocessing.synchronize import Semaphore
 from pathlib import Path
 
-from sifi_streamer.capture.records import Attributes
+from sifi_streamer.acquisition.devices import SignalStreamSpec
+from sifi_streamer.capture.records import Attributes, Packet
+
+
+@dataclass(slots=True)
+class ProcessSignal:
+    """One-shot OS semaphore notification, cached independently by each reader.
+
+    Startup releases one token per worker. Shutdown uses one token for its one
+    worker. No worker-owned mutex is needed to notify a killed process.
+    """
+
+    semaphore: Semaphore
+    readers: int = 1
+    observed: bool = False
+
+    def set(self) -> None:
+        if not self.observed:
+            for _ in range(self.readers):
+                self.semaphore.release()
+            self.observed = True
+
+    def is_set(self) -> bool:
+        if not self.observed and self.semaphore.acquire(block=False):
+            self.observed = True
+        return self.observed
+
+    def wait(self, timeout: float) -> bool:
+        if not self.observed and self.semaphore.acquire(timeout=timeout):
+            self.observed = True
+        return self.observed
 
 
 @dataclass(frozen=True, slots=True)
-class StartCapture:
-    """Request creation of a new authoritative capture.
-
-    Attributes:
-        capture_file: New output path, which must not already exist.
-        capture_id: Identifier for the capture occurrence.
-        attributes: Scalar capture metadata.
-    """
+class CaptureConfiguration:
+    """Capture identity and settings prepared before any worker starts."""
 
     capture_file: Path
     capture_id: str
     attributes: Attributes
-
-
-@dataclass(frozen=True, slots=True)
-class StopCapture:
-    """Request a flushed capture close with a machine-readable reason."""
-
-    reason: str = "normal_completion"
-
-
-@dataclass(frozen=True, slots=True)
-class StartSegment:
-    """Request an authoritative segment start boundary.
-
-    Attributes:
-        segment_id: Identifier for this segment occurrence.
-        segment_kind: Stable category assigned by the consumer.
-        attributes: Scalar segment metadata.
-    """
-
-    segment_id: str
-    segment_kind: str
-    attributes: Attributes
-
-
-@dataclass(frozen=True, slots=True)
-class StopSegment:
-    """Request a stop boundary for an open segment.
-
-    Attributes:
-        segment_id: Identifier of the open segment.
-        reason: Optional machine-readable completion reason.
-    """
-
-    segment_id: str
-    reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AddMarker:
-    """Request one point marker in ``marker_id, marker_kind`` order.
-
-    Attributes:
-        marker_id: Identifier for this marker occurrence.
-        marker_kind: Stable category assigned by the consumer.
-        attributes: Scalar marker metadata.
-        source_time_ns: Optional timestamp from an external source clock.
-        source_clock: Optional external clock name.
-    """
-
-    marker_id: str
-    marker_kind: str
-    attributes: Attributes
-    source_time_ns: int | None = None
-    source_clock: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Shutdown:
-    """Request orderly worker shutdown and resource cleanup."""
-
-
-type CommandMessage = (
-    StartCapture | StopCapture | StartSegment | StopSegment | AddMarker | Shutdown
-)
+    configuration: Packet = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class StreamInfo:
-    """Shared-memory and display metadata for one generic live stream."""
+    """Shared-memory and display metadata for one device-scoped live stream."""
 
     stream_id: str
     shm_name: str
@@ -102,6 +60,10 @@ class StreamInfo:
     label: str | None = None
     channel_labels: tuple[str | None, ...] = ()
     channel_units: tuple[str | None, ...] = ()
+    device_id: str = "device"
+    local_stream_id: str = ""
+    source_clock: str = "producer-defined"
+    timestamp_unit: str = "seconds"
 
     @property
     def n_channels(self) -> int:
@@ -112,70 +74,36 @@ class StreamInfo:
 
 
 @dataclass(frozen=True, slots=True)
-class Ready:
-    """Report successful worker startup and available live streams.
+class DeviceInfoUpdate:
+    """Latest report snapshot, independently ordered for each device."""
 
-    Attributes:
-        streams: Shared-memory layout for each declared stream.
-        device_info: Optional vendor metadata reported during device connection.
-    """
+    revision: int
+    info: dict[str, object]
+    device_id: str = "device"
+
+
+@dataclass(frozen=True, slots=True)
+class Ready:
+    """Connected device declaration; polling waits for the global start gate."""
 
     streams: tuple[StreamInfo, ...]
-    device_info: dict[str, object] | None = None
+    device_info: dict[str, object] = field(default_factory=dict)
+    device_info_revision: int = 0
+    registry: tuple[SignalStreamSpec, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class CaptureStarted:
-    """Acknowledge that ``capture_file`` was created and recording began."""
+class WorkerStopped:
+    """All final submissions and device cleanup precede this acknowledgement."""
 
-    capture_file: Path
-
-
-@dataclass(frozen=True, slots=True)
-class CaptureStopped:
-    """Acknowledge that the capture was flushed and stopped for ``reason``."""
-
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class SegmentStarted:
-    """Acknowledge the authoritative start of ``segment_id``."""
-
-    segment_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class SegmentStopped:
-    """Acknowledge the authoritative stop of ``segment_id``."""
-
-    segment_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class MarkerAdded:
-    """Acknowledge persistence of ``marker_id``."""
-
-    marker_id: str
+    failure: str | None = None
+    device_info: dict[str, object] = field(default_factory=dict)
+    device_info_revision: int = 0
+    producer_completed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class ErrorAck:
-    """Report that a worker command failed.
-
-    Attributes:
-        message: Human-readable detail from the specific worker-side exception.
-    """
+    """Connected device startup failed; the coordinator tears down the capture."""
 
     message: str
-
-
-type AckMessage = (
-    Ready
-    | CaptureStarted
-    | CaptureStopped
-    | SegmentStarted
-    | SegmentStopped
-    | MarkerAdded
-    | ErrorAck
-)

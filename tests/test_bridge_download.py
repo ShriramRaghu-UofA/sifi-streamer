@@ -94,7 +94,7 @@ class BridgeDownloadTests(unittest.TestCase):
         self.assertEqual(asset.version, TESTED_VERSION)
         self.assertEqual(
             asset.sha256,
-            "430695acae73d0cf8f199d00462d93c4e6c9bad0eea96f8e6dada7a7aeef9ff1",
+            "2c482ae876ac31a005163c39de31dc7b9315282da8f3fb8c4362c14bf85dd437",
         )
         self.assertTrue(asset.url.endswith(f"/{asset.filename}"))
 

@@ -1,7 +1,12 @@
+import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import numpy as np
 
@@ -12,6 +17,7 @@ from sifi_streamer.acquisition import (
     create_capture_runtime,
 )
 from sifi_streamer.capture import CaptureLogReader, SegmentStarted
+from sifi_streamer.exceptions import CaptureInitializationError, DeviceError
 from sifi_streamer.sifi import create_sifi_capture_runtime
 from sifi_streamer.web import (
     AnnotationKindDefinition,
@@ -19,6 +25,7 @@ from sifi_streamer.web import (
     AnnotationTarget,
     WebCaptureCoordinator,
 )
+from sifi_streamer.web.coordinator import _Handler, _WebServer
 
 
 class CustomPacket:
@@ -26,6 +33,7 @@ class CustomPacket:
         self.stream_id = "force/left"
         self.timestamps = [index / 100]
         self.data = {"force": [index], "quality": [None if index % 2 else index]}
+        self.validity = {"force": [True], "quality": [True]}
         self.reported_rate_hz = 99.5
         self.samples_lost = 0
         self.status = "ok"
@@ -70,6 +78,9 @@ class CustomDevice:
     def disconnect(self) -> None:
         self._connected = False
 
+    def request_stop(self) -> None:
+        self._connected = False
+
     def read_packet(self) -> CustomPacket:
         if not self._connected:
             raise RuntimeError("not connected")
@@ -79,24 +90,142 @@ class CustomDevice:
 
 
 class ObservabilityTests(unittest.TestCase):
+    def test_named_device_reports_survive_updates_and_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Mock()
+            runtime.monitor.device_infos = {
+                "left": {"name": "Band A", "serial": "A"},
+                "right": {"name": "Band B", "serial": "B"},
+            }
+            runtime.monitor.launch_configuration = {}
+            runtime.monitor.streams = ()
+            runtime.monitor.latest.return_value = None
+            coordinator = WebCaptureCoordinator(
+                Path(directory) / "test.capture.duckdb",
+                lambda capture_id, attributes, configuration: runtime,
+                requested_devices={"left": {"Handle": "A"}, "right": {"Handle": "B"}},
+                device_info_formatter=lambda info: {"Name": str(info["name"])},
+                health_log_enabled=False,
+            )
+            before = coordinator.bootstrap()["devices"]
+            assert isinstance(before, dict)
+            self.assertEqual(before["left"]["requested"], {"Handle": "A"})
+            self.assertEqual(before["right"]["info"], {})
+            coordinator.start("test", {})
+            try:
+                after = coordinator.bootstrap()["devices"]
+                assert isinstance(after, dict)
+                self.assertEqual(after["left"]["summary"], {"Name": "Band A"})
+                self.assertEqual(after["right"]["info"]["serial"], "B")
+                runtime.monitor.device_infos["right"]["name"] = "Updated B"
+                updated = coordinator.bootstrap()["devices"]
+                assert isinstance(updated, dict)
+                self.assertEqual(updated["right"]["summary"], {"Name": "Updated B"})
+                self.assertEqual(after["right"]["info"]["name"], "Band B")
+            finally:
+                coordinator.stop()
+            self.assertEqual(coordinator.bootstrap()["devices"], updated)
+
+    def test_failed_start_keeps_reports_associated_with_device_ids(self) -> None:
+        runtime = Mock()
+        runtime.controller.start.side_effect = DeviceError("right failed")
+        runtime.monitor.device_infos = {"left": {"serial": "A"}}
+        runtime.monitor.launch_configuration = {}
+        coordinator = WebCaptureCoordinator(
+            Path("unused.capture.duckdb"),
+            lambda capture_id, attributes, configuration: runtime,
+            requested_devices={"left": {"Handle": "A"}, "right": {"Handle": "B"}},
+            health_log_enabled=False,
+        )
+        with self.assertRaisesRegex(DeviceError, "right failed"):
+            coordinator.start("test", {})
+        devices = coordinator.bootstrap()["devices"]
+        assert isinstance(devices, dict)
+        self.assertEqual(devices["left"]["info"], {"serial": "A"})
+        self.assertEqual(devices["right"]["requested"], {"Handle": "B"})
+        self.assertEqual(devices["right"]["info"], {})
+
+    def test_startup_failure_returns_json_and_preserves_cause(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Mock()
+            runtime.monitor.device_infos = {}
+            runtime.monitor.launch_configuration = {}
+
+            def fail():
+                try:
+                    raise DeviceError("physical sensor report missing")
+                except DeviceError as exc:
+                    raise CaptureInitializationError("backend failed") from exc
+
+            runtime.controller.start.side_effect = fail
+            coordinator = WebCaptureCoordinator(
+                Path(directory) / "failed.capture.duckdb",
+                lambda capture_id, attributes, configuration: runtime,
+            )
+            server = _WebServer(("127.0.0.1", 0), _Handler)
+            server.coordinator = coordinator
+            server.token = "test"
+            server.origin = f"http://127.0.0.1:{server.server_port}"
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                for _ in range(2):
+                    request = Request(
+                        f"{server.origin}/api/capture/start",
+                        data=json.dumps({"capture_id": "failed"}).encode(),
+                        headers={
+                            "X-SiFi-Session-Token": "test",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    with self.assertRaises(HTTPError) as error:
+                        urlopen(request, timeout=5)
+                    with error.exception as response:
+                        self.assertEqual(response.code, 400)
+                        result = json.load(response)
+                    self.assertEqual(result["state"], "failed")
+                    self.assertIn("physical sensor report missing", result["error"])
+                    self.assertNotIn("already started", result["error"])
+                self.assertEqual(coordinator.bootstrap()["error"], result["error"])
+                self.assertEqual(coordinator.live({})["error"], result["error"])
+                runtime.controller.start.assert_called_once()
+                runtime.controller.close.assert_called_once_with("startup_failure")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+
+    def test_factory_failure_sets_failed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            coordinator = WebCaptureCoordinator(
+                Path(directory) / "failed.capture.duckdb",
+                Mock(side_effect=DeviceError("factory failed")),
+            )
+            with self.assertRaisesRegex(DeviceError, "factory failed"):
+                coordinator.start("failed", {})
+            self.assertEqual(coordinator.bootstrap()["state"], "failed")
+            self.assertEqual(coordinator.bootstrap()["error"], "factory failed")
+
     def test_custom_stream_validity_cursor_and_health(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "custom.capture.jsonl.zst"
+            output = Path(directory) / "custom.capture.duckdb"
             runtime = create_capture_runtime(output, "custom", CustomDevice)
             runtime.controller.start()
             try:
                 time.sleep(0.04)
                 streams = runtime.monitor.streams
-                self.assertEqual(streams[0].stream_id, "force/left")
+                self.assertEqual(streams[0].stream_id, "device/force/left")
                 self.assertEqual(streams[0].channel_units, ("N", None))
-                window = runtime.monitor.read_since("force/left", 0)
+                window = runtime.monitor.read_since("device/force/left", 0)
                 assert window is not None
                 self.assertEqual(window.samples.dtype, np.dtype(np.int64))
                 self.assertTrue(window.validity[:, 0].all())
                 self.assertTrue((~window.validity[:, 1]).any())
-                self.assertIsNone(
-                    runtime.monitor.read_since("force/left", window.end_index)
+                next_window = runtime.monitor.read_since(
+                    "device/force/left", window.end_index
                 )
+                if next_window is not None:
+                    self.assertEqual(next_window.start_index, window.end_index)
                 time.sleep(0.3)
                 health = runtime.monitor.latest()
                 assert health is not None
@@ -128,9 +257,9 @@ class ObservabilityTests(unittest.TestCase):
 
     def test_web_coordinator_lifecycle_and_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "web.capture.jsonl.zst"
+            output = Path(directory) / "web.capture.duckdb"
 
-            def factory(capture_id, attributes):
+            def factory(capture_id, attributes, configuration):
                 return create_sifi_capture_runtime(
                     output,
                     capture_id,
@@ -161,7 +290,7 @@ class ObservabilityTests(unittest.TestCase):
             live = coordinator.live({})
             batches = live["batches"]
             assert isinstance(batches, dict)
-            self.assertIn("emg_armband", batches)
+            self.assertIn("device/emg_armband", batches)
             coordinator.stop()
             self.assertEqual(coordinator.bootstrap()["state"], "stopped")
             self.assertTrue(Path(directory, "web.health.jsonl").exists())
