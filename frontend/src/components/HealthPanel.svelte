@@ -4,7 +4,7 @@
   import type { Dashboard } from '../lib/dashboard.svelte.js';
   import type { Thresholds } from '../lib/types';
   import { formatRate, title, thresholdsValid } from '../lib/types';
-  let { dashboard } = $props<{ dashboard: Dashboard }>();
+  let { dashboard }: { dashboard: Dashboard } = $props();
   const rules: { key: keyof Thresholds; label: string; hint: string; step: string; min: number }[] =
     [
       {

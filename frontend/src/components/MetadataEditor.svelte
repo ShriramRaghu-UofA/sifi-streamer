@@ -13,12 +13,12 @@
     valid = $bindable(true),
     disabled = false,
     label = 'Metadata',
-  } = $props<{
+  }: {
     value?: Attributes;
     valid?: boolean;
     disabled?: boolean;
     label?: string;
-  }>();
+  } = $props();
   let sequence = 0;
   let rows = $state<Row[]>(
     Object.entries(untrack(() => value)).map(([key, item]) => ({

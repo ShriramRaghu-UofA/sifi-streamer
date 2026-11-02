@@ -2,11 +2,15 @@
   import { Palette, Sun, Moon, Monitor, ChevronDown } from '@lucide/svelte';
   import { Popover, Portal, SegmentedControl } from '@skeletonlabs/skeleton-svelte';
   import { themes, title, type Theme, type ColorMode } from '../lib/types';
-  let { theme, mode, onchange } = $props<{
+  let {
+    theme,
+    mode,
+    onchange,
+  }: {
     theme: Theme;
     mode: ColorMode;
     onchange: (theme: Theme, mode: ColorMode) => void;
-  }>();
+  } = $props();
 </script>
 
 <Popover positioning={{ placement: 'bottom-end' }}>

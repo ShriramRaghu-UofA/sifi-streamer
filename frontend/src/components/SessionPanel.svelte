@@ -5,10 +5,13 @@
   import type { Dashboard } from '../lib/dashboard.svelte.js';
   import { formatRate, title } from '../lib/types';
   import type { Provenance, Stream } from '../lib/types';
-  let { dashboard, metadataValid = $bindable(true) } = $props<{
+  let {
+    dashboard,
+    metadataValid = $bindable(true),
+  }: {
     dashboard: Dashboard;
     metadataValid?: boolean;
-  }>();
+  } = $props();
   let editable = $derived(dashboard.phase === 'setup');
   let provenance = $derived(dashboard.live ?? dashboard.bootstrap);
   let devices: [string, Provenance['devices'][string]][] = $derived(

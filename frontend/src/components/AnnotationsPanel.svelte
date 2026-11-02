@@ -4,7 +4,7 @@
   import MetadataEditor from './MetadataEditor.svelte';
   import type { Dashboard } from '../lib/dashboard.svelte.js';
   import type { Kind, Attributes } from '../lib/types';
-  let { dashboard } = $props<{ dashboard: Dashboard }>();
+  let { dashboard }: { dashboard: Dashboard } = $props();
   let editorOpen = $state(false);
   let editing = $state(false);
   let draft = $state<Kind>(emptyKind());

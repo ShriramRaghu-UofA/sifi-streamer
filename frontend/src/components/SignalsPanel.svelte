@@ -4,7 +4,7 @@
   import Plot from '../Plot.svelte';
   import type { Dashboard } from '../lib/dashboard.svelte.js';
   import { formatRate, title, type Stream, type StreamHealth } from '../lib/types';
-  let { dashboard, appearance } = $props<{ dashboard: Dashboard; appearance: string }>();
+  let { dashboard, appearance }: { dashboard: Dashboard; appearance: string } = $props();
   let layout = $state<string | null>('grid');
   let query = $state('');
   let visible: Stream[] = $derived(
