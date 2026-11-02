@@ -1,5 +1,12 @@
 # Architecture
 
+The package separates durable recording from live display. Device workers send
+samples and events to one recorder, while shared-memory rings provide recent
+signals to monitors and the dashboard. Display retention and conversion do not
+change the authoritative capture.
+
+## Components and ownership
+
 ```text
 CaptureController -> CaptureBackend -> AcquisitionCaptureBackend
                                               |
@@ -63,4 +70,6 @@ Live rings and health are separate from persistence. Their recent-window retenti
 and display conversion must not affect authoritative samples. Optional health JSONL
 sidecars remain non-authoritative.
 
-See [persistence-design.md](persistence-design.md) and [api.md](api.md).
+See [storage design](persistence-design.md) for persistence policies and the
+[Python API reference](api.md) for integration contracts. To analyze a recording,
+start with the [inspection guide](inspecting-captures.md).

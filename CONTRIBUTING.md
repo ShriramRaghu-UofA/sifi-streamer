@@ -2,7 +2,7 @@
 
 This package targets Python 3.14 or newer and uses `uv` for Python dependency
 management, commands, and builds. The local capture dashboard uses Node.js 24,
-Svelte 5, Tailwind CSS, daisyUI, and uPlot.
+Svelte 5, Tailwind CSS, Skeleton, and uPlot.
 
 Read [AGENTS.md](AGENTS.md), [architecture.md](architecture.md), and
 [compatibility.md](compatibility.md) before changing public APIs, capture
@@ -81,7 +81,9 @@ Install the wheel into a clean Python 3.14 environment and confirm that:
 - `sifi-capture --help`, `sifi-capture-web --help`, and `sifi-capture-export --help`
   succeed;
 - the packaged dashboard assets are present;
-- a short synthetic capture can be written and read back.
+- a short synthetic capture can be written and read back;
+- representative current-schema captures decode without changing their bytes,
+  with neither consumer repository on `sys.path`.
 
 Use temporary directories for captures and installation smoke tests. Do not
 commit build output under `dist`, temporary captures, virtual environments, or

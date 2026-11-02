@@ -141,3 +141,84 @@ download operation; TCP, UDP, and stdout transports remain supported.
 recording. Built assets ship in the wheel. `sifi-capture-export SOURCE OUTPUT`
 exports generic tables with `--format parquet|csv`, repeatable `--table`, and
 optional `--native-variant`. All exports are derived and refuse existing outputs.
+
+## Integrate custom hardware
+
+Custom hardware implements the structural `AcquisitionDevice` and
+`AcquisitionPacket` protocols by shape; explicit inheritance or registration is
+not required. A connected device declares one fixed ordered stream registry and
+each packet contributes samples to at most one declared stream while optionally
+providing its complete raw document for capture.
+
+Use `create_capture_runtime` with a zero-argument device factory or a mapping
+of device IDs to factories. The [adapter example](examples/myo_adapter.py)
+defines the transport interface your SDK wrapper must implement.
+
+
+See [examples/myo_adapter.py](examples/myo_adapter.py) for the complete SDK-neutral
+packet/device implementation. It records samples directly, without requiring a
+raw document. It uses adapter receipt `time.perf_counter_ns()` as its declared
+source clock; that is an adapter observation time, not a hardware measurement
+clock. Each packet supplies timestamps, channel values, explicit validity, and
+health metadata. The integration's thread-safe `request_stop()` unblocks pending
+reads before final `disconnect()`. Factories must be top-level/picklable.
+
+All device layouts register before acquisition starts. Stream identity is
+`(device_id, stream_id)`, and live monitoring exposes device-scoped keys. Dynamic
+stream registration and silent padding/truncation are unsupported. Any unhandled
+device, transport, or recorder error stops the entire capture.
+
+## Capture provenance and diagnostics
+
+A composed capture starts before hardware connection. Its first records are
+`capture_started` and `launch_configuration`, containing resolved integration and
+acquisition settings. The web launcher also includes health rules and annotation
+configuration; the standalone launcher records its mode and requested duration.
+Failed hardware startup leaves a readable capture with the requested settings,
+available reports, a `diagnostic`, and `capture_stopped` (`startup_failure`).
+
+Device metadata is an explicit `device_info` record with `stage` and `info`.
+SiFi records reports at `before_configuration`, `after_configuration`, and
+`after_start`. Device reports and raw packets preserve the parsed vendor JSON
+without modifying its contents. `{}` is an explicit empty report; no event means
+no record. Packet `capture_document()` may still return `None` to omit a document.
+
+Third-party integrations return a JSON object from `device_info`. To emit staged
+or during-capture reports, structurally implement
+`CaptureEventSource.set_capture_event_sink(sink)` and call the supplied sink:
+
+```python
+from dataclasses import asdict
+from sifi_streamer.capture import DeviceInfoEvent, DiagnosticEvent
+
+# Inside the integration, after receiving an explicit report:
+sink(DeviceInfoEvent("during_capture", asdict(my_report)))
+sink(
+    DiagnosticEvent(
+        "warning",
+        "my-device",
+        "during_capture",
+        "quality",
+        "Check sensor placement",
+        {},
+    )
+)
+```
+
+Keep dataclasses and payload schemas in the integration. Supply finite JSON
+objects; nested objects and lists are supported. Consumer code can similarly call
+`controller.record_event(DiagnosticEvent(...))` while the controller is started.
+Severity (`info`, `warning`, `error`) describes the event and does not itself stop
+recording. Periodic health snapshots and routine Python logs remain separate.
+
+The dashboard shows the requested device selection before startup and reported
+SiFi identity afterward. Expand Device report or Recorded launch configuration to
+inspect the complete JSON. Reported metadata remains available after stopping.
+
+## Dashboard annotation definitions
+
+The CLI loads definitions from `--kinds-file`. Python callers pass a sequence
+of `AnnotationKindDefinition` values through `definitions=` to `serve_capture_web`.
+Import both from `sifi_streamer.web`.
+See [reusable annotation kinds](dashboard.md#reusable-annotation-kinds) for the
+JSON format, defaults, ID generation, and merge rules.

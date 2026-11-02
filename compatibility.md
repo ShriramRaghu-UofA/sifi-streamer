@@ -1,4 +1,11 @@
-# Pre-v1 capture replacement
+# Capture format and compatibility
+
+Current captures use DuckDB database schema version 1. This database schema
+version is separate from the wire schema versions used by earlier JSONL
+captures. Readers reject unsupported versions and unknown record types;
+unknown fields on known records are accepted for forward compatibility.
+
+## Replacing earlier JSONL captures
 
 The authoritative capture is now a `.capture.duckdb` database. This is a deliberate
 breaking change before v1. There is no reader, migration, or dual-write path for

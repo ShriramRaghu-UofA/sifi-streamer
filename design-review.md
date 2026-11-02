@@ -1,5 +1,10 @@
 # Python design review — 2026-10-06
 
+This is a historical review of the earlier JSONL implementation. Its schema
+versions and validation results describe that revision, not the current DuckDB
+release. For current behavior, see [architecture](architecture.md) and
+[compatibility](compatibility.md).
+
 The review focused on assertions, reflective access, validation, and resource
 ownership in the Python package. Changes preserve public signatures and capture
 schema version 2.
